@@ -7,6 +7,9 @@ import re
 import time
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+# concatenar todos los vectores de cada 20k tweets
+from scipy.sparse import vstack
+
 # importamos modelo de red neuronal
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
@@ -15,7 +18,7 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 # =====================================================================================================================
 """funcion para limpieza"""
 # =====================================================================================================================
-stop_words = {"the","and","is","in","at","of","a","to","for","on","it","this","that"}  # set básico de stopwords
+stop_words = {"the","and","is","in","at","of","a","to","for","on","it","this","that"} # set básico de stopwords
 
 def procesar_texto(texto: str) -> list[str]:
     # minúsculas
@@ -37,25 +40,61 @@ df = pd.read_csv('Suicide_Detection.csv')
 df = df.drop(df.columns[0], axis=1)
 
 # =====================================================================================================================
-"""vectorizando"""
+"""vectorizando con mediciones cada 20k tweets"""
 # =====================================================================================================================
 vectorizer = TfidfVectorizer(
-    tokenizer=procesar_texto,  # usamos regex
-    lowercase=False,            # ya convertimos a minúsculas
-    max_features=1000           # límite de vocabulario
+    tokenizer=procesar_texto,
+    lowercase=False,
+    max_features=1000
 )
 
-inicio = time.time()                        # aqui esta lo bueno: iniciamos el timer para saber cuanto tardamos en el proceso de limpiar y vectorizar el texto
-x = vectorizer.fit_transform(df["text"])
-fin = time.time()                           # Termina el proceso de vectorizacion
-# ===========================LO QUE NOS INTERESA===========================
+# Lista para almacenar resultados intermedios
+tiempos_parciales = []
+intervalo = 20000  # cada 20k tweets
 total_tweets = len(df)
-tiempo_total = fin - inicio
-tiempo_promedio = tiempo_total / total_tweets
 
-print(f"Tiempo total: {tiempo_total:.2f} s")
+# Primero fit del vocabulario con todo el dataset
+print("Ajustando vocabulario...")
+vectorizer.fit(df["text"])
+
+# Ahora transformar por lotes y medir tiempo
+inicio_total = time.time()
+vectores_parciales = []
+
+for i in range(0, total_tweets, intervalo):
+    fin_lote = min(i + intervalo, total_tweets)
+    df_lote = df.iloc[i:fin_lote]  # solo este lote
+    
+    # Transformar solo este lote
+    x_lote = vectorizer.transform(df_lote["text"])
+    vectores_parciales.append(x_lote)
+    
+    tiempo_transcurrido = time.time() - inicio_total
+    tweets_procesados = fin_lote
+    
+    # Guardar información del lote
+    tiempos_parciales.append({
+        "tweets_procesados": tweets_procesados,
+        "tiempo_acumulado_s": tiempo_transcurrido,
+        "tiempo_promedio_s": tiempo_transcurrido / tweets_procesados
+    })
+    
+    print(f"Tweets procesados: {tweets_procesados}/{total_tweets} - Tiempo acumulado: {tiempo_transcurrido:.2f}s")
+
+x = vstack(vectores_parciales)
+
+tiempo_total = time.time() - inicio_total
+
+# ===========================LO QUE NOS INTERESA===========================
+tiempo_promedio = tiempo_total / total_tweets
+print(f"\nTiempo total: {tiempo_total:.2f} s")
 print(f"Tweets procesados: {total_tweets}")
-print(f"Tiempo promedio por tweet: {tiempo_promedio:.6f} s") # sera nuestra carga de los algos. de PSO y GA
+print(f"Tiempo promedio por tweet: {tiempo_promedio:.6f} s")
+
+# Guardar resultados parciales en CSV
+df_tiempos = pd.DataFrame(tiempos_parciales)
+df_tiempos.to_csv("tiempo.csv", index=False)
+print("\nTiempos parciales guardados en 'tiempo.csv'")
 
 # =====================================================================================================================
 """entrenando modelo"""
@@ -65,10 +104,10 @@ x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.3, random_
 
 # crear y configurar la red neuronal
 mlp = MLPClassifier(
-    hidden_layer_sizes=(128, 64),  # dos capas ocultas
-    activation='relu',             # función de activación
-    solver='adam',                 # optimizador
-    max_iter=20,                   # número de épocas
+    hidden_layer_sizes=(128, 64),
+    activation='relu',
+    solver='adam',
+    max_iter=20,
     random_state=42
 )
 
@@ -82,32 +121,3 @@ y_pred = mlp.predict(x_test)
 print("Exactitud:", accuracy_score(y_test, y_pred))
 print("\nReporte de clasificación:")
 print(classification_report(y_test, y_pred))
-
-# guardamos el "tiempo_total" y "tiempo_promedio" en un csv
-resultados = pd.DataFrame({
-    "Tiempo_total_s": [tiempo_total],
-    "Tiempo_promedio_s": [tiempo_promedio]
-})
-
-resultados.to_csv("tiempo.csv", index=False)
-print("\nDatos guardados en 'tiempo.csv'")
-
-"""
-OUTPUT ACTUAL: 
-
-Tiempo total: 14.83 s
-Tweets procesados: 232074
-Tiempo promedio por tweet: 0.000064 s
-
-Exactitud: 0.9043706821021789
-
-Reporte de clasificación:
-              precision    recall  f1-score   support
-
- non-suicide       0.90      0.91      0.90     34824
-     suicide       0.91      0.90      0.90     34799
-
-    accuracy                           0.90     69623
-   macro avg       0.90      0.90      0.90     69623
-weighted avg       0.90      0.90      0.90     69623
-"""
