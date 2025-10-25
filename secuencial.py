@@ -1,14 +1,20 @@
+# librerias para guardar el csv
 import numpy as np
 import pandas as pd
 
+# librerias para limpieza y vectorizacion
 import re
 import time
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+# importamos modelo de red neuronal
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
+# =====================================================================================================================
+"""funcion para limpieza"""
+# =====================================================================================================================
 stop_words = {"the","and","is","in","at","of","a","to","for","on","it","this","that"}  # set básico de stopwords
 
 def procesar_texto(texto: str) -> list[str]:
@@ -24,17 +30,22 @@ def procesar_texto(texto: str) -> list[str]:
     tokens = [w for w in tokens if w not in stop_words and len(w) > 2]
     return tokens
 
-
+# =====================================================================================================================
+"""leyendo dataset"""
+# =====================================================================================================================
 df = pd.read_csv('Suicide_Detection.csv')
 df = df.drop(df.columns[0], axis=1)
 
+# =====================================================================================================================
+"""vectorizando"""
+# =====================================================================================================================
 vectorizer = TfidfVectorizer(
     tokenizer=procesar_texto,  # usamos regex
     lowercase=False,            # ya convertimos a minúsculas
     max_features=1000           # límite de vocabulario
 )
 
-inicio = time.time()                        # Aqui esta lo bueno: iniciamos el timer para saber cuanto tardamos en el proceso de limpiar y vectorizar el texto
+inicio = time.time()                        # aqui esta lo bueno: iniciamos el timer para saber cuanto tardamos en el proceso de limpiar y vectorizar el texto
 x = vectorizer.fit_transform(df["text"])
 fin = time.time()                           # Termina el proceso de vectorizacion
 # ===========================LO QUE NOS INTERESA===========================
@@ -45,13 +56,14 @@ tiempo_promedio = tiempo_total / total_tweets
 print(f"Tiempo total: {tiempo_total:.2f} s")
 print(f"Tweets procesados: {total_tweets}")
 print(f"Tiempo promedio por tweet: {tiempo_promedio:.6f} s") # sera nuestra carga de los algos. de PSO y GA
-# =========================================================================
 
+# =====================================================================================================================
+"""entrenando modelo"""
+# =====================================================================================================================
 y = df["class"]
-
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.3, random_state=42)
 
-# Crear y configurar la red neuronal
+# crear y configurar la red neuronal
 mlp = MLPClassifier(
     hidden_layer_sizes=(128, 64),  # dos capas ocultas
     activation='relu',             # función de activación
@@ -70,6 +82,15 @@ y_pred = mlp.predict(x_test)
 print("Exactitud:", accuracy_score(y_test, y_pred))
 print("\nReporte de clasificación:")
 print(classification_report(y_test, y_pred))
+
+# guardamos el "tiempo_total" y "tiempo_promedio" en un csv
+resultados = pd.DataFrame({
+    "Tiempo_total_s": [tiempo_total],
+    "Tiempo_promedio_s": [tiempo_promedio]
+})
+
+resultados.to_csv("tiempo.csv", index=False)
+print("\nDatos guardados en 'tiempo.csv'")
 
 """
 OUTPUT ACTUAL: 
