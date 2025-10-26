@@ -154,6 +154,7 @@ def compare_pipelines(
                 intervalo=20_000,
                 train_model=train_now
             )
+            experiment_result['seq_time'] = seq_total_time
             if train_now and 'mlp_stats' in seq_stats:
                 experiment_result['seq_accuracy'] = seq_stats['mlp_stats']['accuracy']
             print(f"✓ [SECUENCIAL] Completado en {seq_total_time:.2f}s")
@@ -178,6 +179,7 @@ def compare_pipelines(
                 verbose=verbose,
                 train_model=train_now
             )
+            experiment_result['ga_time'] = ga_total_time
             if train_now and 'mlp_stats' in ga_stats:
                 experiment_result['ga_accuracy'] = ga_stats['mlp_stats']['accuracy']
             print(f"✓ [GA-PARALELO] Completado en {ga_total_time:.2f}s")
@@ -204,6 +206,7 @@ def compare_pipelines(
                     verbose=verbose,
                     train_model=train_now
                 )
+                experiment_result['pso_time'] = pso_total_time
                 if train_now and 'mlp_stats' in pso_stats:
                     experiment_result['pso_accuracy'] = pso_stats['mlp_stats']['accuracy']
                     
@@ -393,7 +396,7 @@ if __name__ == '__main__':
     
     # Configuración
     DATA_FILE = 'Suicide_Detection.csv'
-    SIZES = list(range(180_000, 200_001, 20_000))
+    SIZES = list(range(20_000, 200_001, 20_000))
     
     GA_TEST_CONFIG = GA_CONFIG
     PSO_TEST_CONFIG = PSO_CONFIG if PSO_AVAILABLE else None
