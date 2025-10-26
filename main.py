@@ -167,6 +167,9 @@ def compare_pipelines(
     results = []
 
     for size in sizes:
+        if size > len(df_full):
+            print(f"⚠ Tamaño solicitado ({size:,}) excede datos disponibles ({len(df_full):,}). Usando todos los datos.")
+            size = len(df_full)
         print("\n" + "=" * 80)
         print(f"TAMAÑO DEL DATASET: {size:,} tweets")
         print("=" * 80)
@@ -225,8 +228,7 @@ def compare_pipelines(
             print(f"✗ [GA-PARALELO] Error: {e}")
             import traceback
             traceback.print_exc()
-
-        # ====================================================================
+            continue        # ====================================================================
         # EXPERIMENTO 3: PSO-PARALELO (si está disponible)
         # ====================================================================
         if use_pso:
@@ -246,7 +248,7 @@ def compare_pipelines(
                 print(f"✗ [PSO-PARALELO] Error: {e}")
                 import traceback
                 traceback.print_exc()
-
+                continue
         # ====================================================================
         # CALCULAR MÉTRICAS COMPARATIVAS
         # ====================================================================
@@ -525,4 +527,4 @@ if __name__ == '__main__':
         print(f"\n✗ Error durante la comparación: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        sys.exit(1)        sys.exit(1)        sys.exit(1)        sys.exit(1)

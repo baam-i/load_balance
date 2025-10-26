@@ -71,8 +71,7 @@ def procesar_texto(texto: str) -> List[str]:
     texto = texto.lower()
     
     # Paso 2: Eliminar URLs completas
-    texto = re.sub(r'http\S+|www.\S+', '', texto)
-    
+    texto = re.sub(r'http\S+|www\.\S+', '', texto)    
     # Paso 3: Eliminar todo excepto letras y espacios
     texto = re.sub(r"[^a-z\s]", "", texto)
     
