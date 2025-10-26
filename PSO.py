@@ -14,6 +14,11 @@ from typing import List, Tuple, Dict, Any
 from dataclasses import dataclass
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import vstack
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, accuracy_score, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
@@ -49,6 +54,7 @@ class Task:
     task_id: int
     texts: List[str]
     size: int
+    original_indices: List[int]
 
 @dataclass
 class ProcessorState:
@@ -108,12 +114,32 @@ def estimate_task_complexity(texts: List[str]) -> int:
     length_cost = sum(len(text) for text in texts)
     return max(1, base_cost + length_cost)
 
-def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer]) -> Any:
-    """Worker para vectorizar un chunk"""
-    texts, vectorizer = args
-    if not texts:
-        return None
-    return vectorizer.transform(texts)
+def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[Tuple[int, Any]]:
+    """
+    Worker para vectorizar un chunk
+    
+    Returns:
+        Lista de tuplas (indice_original, vector_fila)
+    """
+    texts, vectorizer, original_indices = args
+    
+    if not texts or not original_indices:
+        return []
+    
+    # Verificar consistencia
+    if len(texts) != len(original_indices):
+        print(f"⚠️  WARNING en vectorize_chunk: {len(texts)} texts, {len(original_indices)} indices")
+        return []
+    
+    # Vectorizar el chunk completo
+    X_chunk = vectorizer.transform(texts)
+    
+    # Retornar lista de tuplas (índice_original, vector)
+    result = []
+    for i, original_idx in enumerate(original_indices):
+        result.append((original_idx, X_chunk[i, :]))
+    
+    return result
 
 def calculate_optimal_chunk_size(total_texts: int, num_cores: int) -> int:
     """Calcula chunk_size óptimo"""
@@ -503,18 +529,12 @@ class PSOLoadBalancer:
 def vectorize_with_pso_load_balancing(
     df,
     config: Dict[str, Any] = None,
-    verbose: bool = False
+    verbose: bool = False,
+    train_model: bool = False
 ) -> Tuple[Any, float, Dict[str, Any]]:
     """
     Vectorización TF-IDF con balanceo de carga basado en PSO
-    
-    Args:
-        df: DataFrame con columna 'text'
-        config: Configuración del PSO
-        verbose: Si True, muestra información detallada
-    
-    Returns:
-        Tupla (X, tiempo_total, stats)
+    VERSIÓN CON EMPAREJAMIENTO EXPLÍCITO VECTOR-ETIQUETA
     """
     if config is None:
         config = PSO_CONFIG.copy()
@@ -538,17 +558,21 @@ def vectorize_with_pso_load_balancing(
     fit_time = time.time() - fit_start
     print(f"  Vocabulario listo ({fit_time:.2f}s)")
     
-    # Dividir en tareas
+    # Dividir en tareas CON ÍNDICES ORIGINALES
     chunk_size = calculate_optimal_chunk_size(total_texts, num_cores)
     print(f"  Chunk size óptimo: {chunk_size}")
     
     tasks = []
     for i in range(0, total_texts, chunk_size):
-        chunk = texts[i:i + chunk_size]
+        end_idx = min(i + chunk_size, total_texts)
+        chunk = texts[i:end_idx]
+        original_indices = list(range(i, end_idx))
+        
         task = Task(
             task_id=len(tasks),
             texts=chunk,
-            size=estimate_task_complexity(chunk)
+            size=estimate_task_complexity(chunk),
+            original_indices=original_indices
         )
         tasks.append(task)
     
@@ -584,12 +608,13 @@ def vectorize_with_pso_load_balancing(
     
     start_total = time.time()
     
-    # Procesamiento por ventanas
-    total_windows = (num_tasks_total + window_size - 1) // window_size
-    vectorized_chunks = []
+    # ⭐ Lista de tuplas (índice_original, vector)
+    indexed_vectors = []
+    
     processed_tasks = 0
     window_count = 0
     
+    total_windows = (num_tasks_total + window_size - 1) // window_size
     print(f"  Procesando {total_windows} ventanas...")
     
     while processed_tasks < num_tasks_total:
@@ -608,32 +633,41 @@ def vectorize_with_pso_load_balancing(
         
         print(f"(PSO: {pso_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", end=" ")
         
-        # Mostrar distribución si verbose
         if verbose:
             print()
-            print_distribution_stats(best_mapping, window_tasks, num_cores,
-                                    show_details=True)
+            print_distribution_stats(best_mapping, window_tasks, num_cores, show_details=True)
         
         # Ejecutar vectorización
         vec_start = time.time()
         
         processor_work = [[] for _ in range(num_cores)]
+        processor_indices = [[] for _ in range(num_cores)]
+        
         for proc_id in range(num_cores):
             task_indices = best_mapping.get_processor_tasks(proc_id)
             for local_tid in task_indices:
                 if 0 <= local_tid < len(window_tasks):
-                    processor_work[proc_id].append(window_tasks[local_tid])
+                    task = window_tasks[local_tid]
+                    processor_work[proc_id].append(task)
+                    processor_indices[proc_id].extend(task.original_indices)
         
         work_args = [
-            ([text for task in proc_tasks for text in task.texts], vectorizer)
-            for proc_tasks in processor_work
+            (
+                [text for task in proc_tasks for text in task.texts],
+                vectorizer,
+                proc_indices
+            )
+            for proc_tasks, proc_indices in zip(processor_work, processor_indices)
             if proc_tasks
         ]
         
         if work_args:
             with Pool(processes=num_cores) as pool:
                 chunk_results = pool.map(vectorize_chunk, work_args)
-                vectorized_chunks.extend([r for r in chunk_results if r is not None])
+                
+                for result_list in chunk_results:
+                    if result_list:
+                        indexed_vectors.extend(result_list)
         
         vec_time = time.time() - vec_start
         stats['vectorization_time'] += vec_time
@@ -643,30 +677,160 @@ def vectorize_with_pso_load_balancing(
         else:
             print(f"\n  Vectorización completada en {vec_time:.2f}s")
         
-        # Actualizar estados
         for proc_id in range(num_cores):
             processor_states[proc_id].current_load = 0.0
             processor_states[proc_id].queue.clear()
         
         processed_tasks = window_end
     
-    # Combinar resultados
-    print("  Combinando resultados...")
-    if vectorized_chunks:
-        X = vstack(vectorized_chunks)
-    else:
-        X = vectorizer.transform(texts)
+    # Reconstruir matriz
+    print(f"  Reconstruyendo matriz...")
+    print(f"  - Vectores obtenidos: {len(indexed_vectors)}")
+    print(f"  - Vectores esperados: {total_texts}")
+    
+    vectors_list = [vec for _, vec in indexed_vectors]
+    X = vstack(vectors_list)
+    
+    print(f"  ✅ Matriz construida: {X.shape}")
     
     total_time = time.time() - start_total
     stats['total_time'] = total_time
     
-    # Mostrar resumen
     print(f"\n  Resumen de tiempos:")
     print(f"  - Total: {total_time:.2f}s")
     print(f"  - PSO: {stats['pso_time']:.2f}s ({stats['pso_time']/total_time*100:.1f}%)")
     print(f"  - Vectorización: {stats['vectorization_time']:.2f}s ({stats['vectorization_time']/total_time*100:.1f}%)")
     
+    # ⭐ EMPAREJAMIENTO EXPLÍCITO
+    if train_model and 'class' in df.columns:
+        print(f"\n{'='*70}")
+        print(f"🔗 EMPAREJAMIENTO VECTOR-ETIQUETA")
+        print(f"{'='*70}")
+        
+        y_original = df['class'].values
+        y_aligned = np.zeros(len(indexed_vectors), dtype=y_original.dtype)
+        
+        for i, (original_idx, _) in enumerate(indexed_vectors):
+            y_aligned[i] = y_original[original_idx]
+        
+        print(f"  ✅ Etiquetas emparejadas: {len(y_aligned)}")
+        print(f"  - Forma de X: {X.shape}")
+        print(f"  - Forma de y: {y_aligned.shape}")
+        print(f"  - ¿Coinciden?: {'✅ SÍ' if X.shape[0] == y_aligned.shape[0] else '❌ NO'}")
+        
+        unique, counts = np.unique(y_aligned, return_counts=True)
+        print(f"\n  📊 Distribución de clases:")
+        for label, count in zip(unique, counts):
+            print(f"     Clase {label}: {count} ({count/len(y_aligned)*100:.1f}%)")
+        
+        print(f"\n  🔍 Verificando primeras 5 muestras:")
+        for i in range(min(5, len(indexed_vectors))):
+            original_idx, _ = indexed_vectors[i]
+            text_preview = texts[original_idx][:50] + "..." if len(texts[original_idx]) > 50 else texts[original_idx]
+            print(f"     Vector[{i}] -> Original[{original_idx}] -> Clase={y_aligned[i]}")
+            print(f"         Texto: {text_preview}")
+        
+        print(f"{'='*70}\n")
+        
+        mlp_stats = train_and_evaluate_mlp(X, y_aligned, method_name="PSO-Paralelo")
+        stats['mlp_stats'] = mlp_stats
+    
     return X, total_time, stats
+
+# ============================================================================
+# ENTRENAMIENTO Y EVALUACIÓN DE MODELO
+# ============================================================================
+
+def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]:
+    """
+    Entrena un MLPClassifier y muestra matriz de confusión
+    
+    Args:
+        X: Matriz de características (vectores TF-IDF)
+        y: Etiquetas
+        method_name: Nombre del método para el título
+    
+    Returns:
+        Diccionario con métricas del modelo
+    """
+    print(f"\n{'='*70}")
+    print(f"🧠 ENTRENAMIENTO DE RED NEURONAL MLP ({method_name})")
+    print(f"{'='*70}")
+    
+    # Dividir datos
+    print("  Dividiendo datos (80% train, 20% test)...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    
+    print(f"  Train: {X_train.shape[0]} muestras")
+    print(f"  Test:  {X_test.shape[0]} muestras")
+    
+    # Crear y entrenar modelo
+    print("\n  Entrenando MLP...")
+    mlp_start = time.time()
+    
+    mlp = MLPClassifier(
+        hidden_layer_sizes=(100, 50),  # 2 capas ocultas
+        max_iter=50,                   # Pocas iteraciones para ser rápido
+        random_state=42,
+        verbose=False
+    )
+    
+    mlp.fit(X_train, y_train)
+    mlp_time = time.time() - mlp_start
+    
+    print(f"  ✓ Entrenamiento completado en {mlp_time:.2f}s")
+    
+    # Predecir
+    print("\n  Realizando predicciones...")
+    y_pred = mlp.predict(X_test)
+    
+    # Calcular métricas
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    print(f"\n📊 RESULTADOS:")
+    print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+    
+    # Matriz de confusión
+    cm = confusion_matrix(y_test, y_pred)
+    
+    print(f"\n  Matriz de Confusión:")
+    print(f"  {cm}")
+    
+    # Visualizar matriz de confusión
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['No Suicida', 'Suicida'],
+                yticklabels=['No Suicida', 'Suicida'])
+    plt.title(f'Matriz de Confusión - {method_name}')
+    plt.ylabel('Verdadero')
+    plt.xlabel('Predicho')
+    plt.tight_layout()
+    
+    # Guardar figura
+    filename = f'confusion_matrix_{method_name.lower().replace(" ", "_")}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\n  ✓ Matriz de confusión guardada: {filename}")
+    
+    # Reporte detallado
+    print(f"\n  Reporte de Clasificación:")
+    report = classification_report(y_test, y_pred, 
+                                   target_names=['No Suicida', 'Suicida'])
+    print(report)
+    
+    print(f"{'='*70}\n")
+    
+    # Retornar métricas
+    return {
+        'accuracy': accuracy,
+        'confusion_matrix': cm.tolist(),
+        'train_time': mlp_time,
+        'train_samples': X_train.shape[0],
+        'test_samples': X_test.shape[0]
+    }
 
 # ============================================================================
 # PUNTO DE ENTRADA

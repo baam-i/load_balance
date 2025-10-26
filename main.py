@@ -44,7 +44,8 @@ def compare_pipelines(
     ga_config: Dict[str, Any] = None,
     pso_config: Dict[str, Any] = None,
     enable_pso: bool = True,
-    verbose: bool = False  # NUEVO: Control de verbosidad
+    verbose: bool = False,
+    train_models: bool = False
 ) -> pd.DataFrame:
     """
     Ejecuta experimentos comparativos entre los tres enfoques
@@ -134,6 +135,9 @@ def compare_pipelines(
             'pso_time': np.nan,
             'ga_speedup': np.nan,
             'pso_speedup': np.nan,
+            'seq_accuracy': np.nan,
+            'ga_accuracy': np.nan,
+            'pso_accuracy': np.nan
         }
         
         # ====================================================================
@@ -144,11 +148,14 @@ def compare_pipelines(
         print("-" * 80)
         
         try:
+            train_now = train_models and (size == sizes[-1])
             _, seq_total_time, seq_stats = sequential_vectorize(
                 df_subset,
-                intervalo=20_000
+                intervalo=20_000,
+                train_model=train_now
             )
-            experiment_result['seq_time'] = seq_total_time
+            if train_now and 'mlp_stats' in seq_stats:
+                experiment_result['seq_accuracy'] = seq_stats['mlp_stats']['accuracy']
             print(f"✓ [SECUENCIAL] Completado en {seq_total_time:.2f}s")
         except Exception as e:
             print(f"✗ [SECUENCIAL] Error: {e}")
@@ -164,12 +171,15 @@ def compare_pipelines(
         print("-" * 80)
         
         try:
+            train_now = train_models and (size == sizes[-1])
             _, ga_total_time, ga_stats = vectorize_with_ga_load_balancing(
                 df_subset,
                 config=ga_config,
-                verbose=verbose  # Pasar verbosidad
+                verbose=verbose,
+                train_model=train_now
             )
-            experiment_result['ga_time'] = ga_total_time
+            if train_now and 'mlp_stats' in ga_stats:
+                experiment_result['ga_accuracy'] = ga_stats['mlp_stats']['accuracy']
             print(f"✓ [GA-PARALELO] Completado en {ga_total_time:.2f}s")
         except Exception as e:
             print(f"✗ [GA-PARALELO] Error: {e}")
@@ -186,12 +196,17 @@ def compare_pipelines(
             print("-" * 80)
             
             try:
+                train_now = train_models and (size == sizes[-1])
+                
                 _, pso_total_time, pso_stats = vectorize_with_pso_load_balancing(
                     df_subset,
                     config=pso_config,
-                    verbose=verbose  # Pasar verbosidad
+                    verbose=verbose,
+                    train_model=train_now
                 )
-                experiment_result['pso_time'] = pso_total_time
+                if train_now and 'mlp_stats' in pso_stats:
+                    experiment_result['pso_accuracy'] = pso_stats['mlp_stats']['accuracy']
+                    
                 print(f"✓ [PSO-PARALELO] Completado en {pso_total_time:.2f}s")
             except Exception as e:
                 print(f"✗ [PSO-PARALELO] Error: {e}")
@@ -378,7 +393,7 @@ if __name__ == '__main__':
     
     # Configuración
     DATA_FILE = 'Suicide_Detection.csv'
-    SIZES = list(range(20_000, 200_001, 20_000))
+    SIZES = list(range(180_000, 200_001, 20_000))
     
     GA_TEST_CONFIG = GA_CONFIG
     PSO_TEST_CONFIG = PSO_CONFIG if PSO_AVAILABLE else None
@@ -406,6 +421,11 @@ if __name__ == '__main__':
     print(f"  • Rango: {SIZES[0]:,} - {SIZES[-1]:,} tweets")
     print(f"  • Cores disponibles: {GA_CONFIG['num_cores']}")
     
+    #Preguntar sobre entrenamiento de modelo
+    print(f"\n¿Deseas entrenar modelos MLP en el último batch? (y/n): ", end='')
+    train_response = input().strip().lower()
+    TRAIN_MODELS = (train_response == 'y')
+    
     # Preguntar por modo verbose
     print(f"\n¿Deseas ver la evolución detallada? (y/n): ", end='')
     verbose_response = input().strip().lower()
@@ -428,7 +448,8 @@ if __name__ == '__main__':
             ga_config=GA_TEST_CONFIG,
             pso_config=PSO_TEST_CONFIG,
             enable_pso=PSO_AVAILABLE,
-            verbose=VERBOSE_MODE  # Usar modo seleccionado
+            verbose=VERBOSE_MODE,
+            train_models=TRAIN_MODELS
         )
         
         print("\n✓ Comparación completada exitosamente")

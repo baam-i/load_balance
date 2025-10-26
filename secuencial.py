@@ -28,6 +28,11 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from typing import List, Tuple, Dict, Any
 from scipy.sparse import spmatrix, vstack
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, accuracy_score, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # ============================================================================
 # CONFIGURACIÓN
@@ -141,7 +146,8 @@ def vectorizar_secuencialmente(df: pd.DataFrame) -> float:
 
 def sequential_vectorize(
     df: pd.DataFrame,
-    intervalo: int = 20000
+    intervalo: int = 20000,
+    train_model: bool = False
 ) -> Tuple[spmatrix, float, Dict[str, Any]]:
     """
     Vectorización TF-IDF secuencial con logging detallado
@@ -262,7 +268,107 @@ def sequential_vectorize(
         'total_time': tiempo_total       # Tiempo total de ejecución
     }
     
+    if train_model and 'class' in df.columns:
+        y = df['class'].values
+        mlp_stats = train_and_evaluate_mlp(X, y, method_name="Secuencial")
+        stats['mlp_stats'] = mlp_stats
+    
     return X, tiempo_total, stats
+
+# ============================================================================
+# ENTRENAMIENTO Y EVALUACIÓN DE MODELO
+# ============================================================================
+
+def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]:
+    """
+    Entrena un MLPClassifier y muestra matriz de confusión
+    
+    Args:
+        X: Matriz de características (vectores TF-IDF)
+        y: Etiquetas
+        method_name: Nombre del método para el título
+    
+    Returns:
+        Diccionario con métricas del modelo
+    """
+    print(f"\n{'='*70}")
+    print(f"🧠 ENTRENAMIENTO DE RED NEURONAL MLP ({method_name})")
+    print(f"{'='*70}")
+    
+    # Dividir datos
+    print("  Dividiendo datos (80% train, 20% test)...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    
+    print(f"  Train: {X_train.shape[0]} muestras")
+    print(f"  Test:  {X_test.shape[0]} muestras")
+    
+    # Crear y entrenar modelo
+    print("\n  Entrenando MLP...")
+    mlp_start = time.time()
+    
+    mlp = MLPClassifier(
+        hidden_layer_sizes=(100, 50),  # 2 capas ocultas
+        max_iter=50,                   # Pocas iteraciones para ser rápido
+        random_state=42,
+        verbose=False
+    )
+    
+    mlp.fit(X_train, y_train)
+    mlp_time = time.time() - mlp_start
+    
+    print(f"  ✓ Entrenamiento completado en {mlp_time:.2f}s")
+    
+    # Predecir
+    print("\n  Realizando predicciones...")
+    y_pred = mlp.predict(X_test)
+    
+    # Calcular métricas
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    print(f"\n📊 RESULTADOS:")
+    print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+    
+    # Matriz de confusión
+    cm = confusion_matrix(y_test, y_pred)
+    
+    print(f"\n  Matriz de Confusión:")
+    print(f"  {cm}")
+    
+    # Visualizar matriz de confusión
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['No Suicida', 'Suicida'],
+                yticklabels=['No Suicida', 'Suicida'])
+    plt.title(f'Matriz de Confusión - {method_name}')
+    plt.ylabel('Verdadero')
+    plt.xlabel('Predicho')
+    plt.tight_layout()
+    
+    # Guardar figura
+    filename = f'confusion_matrix_{method_name.lower().replace(" ", "_")}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\n  ✓ Matriz de confusión guardada: {filename}")
+    
+    # Reporte detallado
+    print(f"\n  Reporte de Clasificación:")
+    report = classification_report(y_test, y_pred, 
+                                   target_names=['No Suicida', 'Suicida'])
+    print(report)
+    
+    print(f"{'='*70}\n")
+    
+    # Retornar métricas
+    return {
+        'accuracy': accuracy,
+        'confusion_matrix': cm.tolist(),
+        'train_time': mlp_time,
+        'train_samples': X_train.shape[0],
+        'test_samples': X_test.shape[0]
+    }
 
 
 # ============================================================================
