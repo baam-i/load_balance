@@ -1,11 +1,13 @@
-Suicide_Detection.csv
 .venv/
-Load_Balance.docx
+__pycache__/
 Scheduling.pdf
+Load_Balance.docx
+Suicide_Detection.csv
 comparison_speedup.png
-comparison_times.csv
+#comparison_times.csv
 comparison_times.png
 tiempo.csv
 ga_results.csv
 __pycache__/
 *.png
+E2.pdf
