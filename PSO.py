@@ -20,6 +20,11 @@ from sklearn.metrics import confusion_matrix, accuracy_score, classification_rep
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+import pandas as pd
+
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
