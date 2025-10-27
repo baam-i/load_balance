@@ -81,7 +81,6 @@ class Task:
         texts: Lista de textos a procesar
         size: Complejidad estimada
     """
-    task_id: int
     texts: List[str]
     size: int
     original_indices: List[int]
@@ -795,7 +794,6 @@ def vectorize_with_ga_load_balancing(
         original_indices = list(range(i, end_idx))
         
         task = Task(
-            task_id=len(tasks),
             texts=chunk,
             size=estimate_task_complexity(chunk),
             original_indices=original_indices

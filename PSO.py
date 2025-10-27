@@ -51,7 +51,6 @@ NON_ALPHA_PATTERN = re.compile(r"[^a-z\s]")
 @dataclass
 class Task:
     """Representa una tarea de vectorización"""
-    task_id: int
     texts: List[str]
     size: int
     original_indices: List[int]
@@ -569,7 +568,6 @@ def vectorize_with_pso_load_balancing(
         original_indices = list(range(i, end_idx))
         
         task = Task(
-            task_id=len(tasks),
             texts=chunk,
             size=estimate_task_complexity(chunk),
             original_indices=original_indices
