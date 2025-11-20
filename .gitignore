@@ -1,9 +1,7 @@
 .venv/
 __pycache__/
-
-Scheduling.pdf
-E2.pdf
-Load_Balance.docx
+*.pdf
+*.docx
 
 Suicide_Detection.csv
 
@@ -13,9 +11,4 @@ comparison_times.csv
 
 g2.py
 tempCodeRunnerFile.py
-
-comparison_times.png
-comparison_speedup.png
-comp_barras.png
-
 *.png
