@@ -4,7 +4,6 @@ __pycache__/
 *.docx
 
 Suicide_Detection.csv
-
 tiempo.csv
 ga_results.csv
 comparison_times.csv

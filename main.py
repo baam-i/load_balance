@@ -22,14 +22,7 @@ import matplotlib.pyplot as plt
 # Importar pipelines
 from GA import vectorize_with_ga_load_balancing, GA_CONFIG
 from secuencial import sequential_vectorize
-
-# Importar PSO
-try:
-    from PSO import vectorize_with_pso_load_balancing, PSO_CONFIG
-    PSO_AVAILABLE = True
-except ImportError:
-    PSO_AVAILABLE = False
-    print("⚠ Módulo PSO no disponible. Se omitirá en comparaciones.")
+from PSO import vectorize_with_pso_load_balancing, PSO_CONFIG
 
 # ============================================================================
 # FUNCIÓN PRINCIPAL DE COMPARACIÓN
@@ -41,9 +34,8 @@ def compare_pipelines(
     output_csv: str = "comparison_times.csv",
     output_png: str = "comparison_times.png",
     output_speedup_png: str = "comparison_speedup.png",
-    ga_config: Dict[str, Any] = None,
-    pso_config: Dict[str, Any] = None,
-    enable_pso: bool = True,
+    ga_config: Dict[str, Any] = GA_CONFIG.copy(),
+    pso_config: Dict[str, Any] = PSO_CONFIG.copy(),
     verbose: bool = False,
     train_models: bool = False
 ) -> pd.DataFrame:
@@ -58,7 +50,7 @@ def compare_pipelines(
         output_speedup_png: Gráfica de speedup
         ga_config: Configuración GA
         pso_config: Configuración PSO
-        enable_pso: Si True, ejecuta PSO
+
         verbose: Si True, muestra evolución detallada
     
     Returns:
@@ -68,10 +60,8 @@ def compare_pipelines(
     if ga_config is None:
         ga_config = GA_CONFIG.copy()
     
-    if pso_config is None and PSO_AVAILABLE:
+    if pso_config is None:
         pso_config = PSO_CONFIG.copy()
-    
-    use_pso = PSO_AVAILABLE and enable_pso
     
     # ========================================================================
     # CARGAR DATASET
@@ -82,10 +72,8 @@ def compare_pipelines(
     print(f"\nAlgoritmos a comparar:")
     print("  1. Secuencial (baseline)")
     print("  2. GA-Paralelo (Genetic Algorithm)")
-    if use_pso:
-        print("  3. PSO-Paralelo (Particle Swarm Optimization)")
-    else:
-        print("  3. PSO-Paralelo (NO DISPONIBLE)")
+    print("  3. PSO-Paralelo (Particle Swarm Optimization)")
+
     
     if verbose:
         print(f"\n⚙️  Modo VERBOSE activado: Se mostrarán detalles de evolución")
@@ -107,10 +95,9 @@ def compare_pipelines(
           f"{ga_config['population_size']} población, "
           f"{ga_config['num_generations']} generaciones")
     
-    if use_pso:
-        print(f"✓ Configuración PSO: {pso_config['num_cores']} cores, "
-              f"{pso_config['num_particles']} partículas, "
-              f"{pso_config['num_iterations']} iteraciones")
+    print(f"✓ Configuración PSO: {pso_config['num_cores']} cores, "
+            f"{pso_config['num_particles']} partículas, "
+            f"{pso_config['num_iterations']} iteraciones")
     
     # ========================================================================
     # EJECUTAR EXPERIMENTOS
@@ -192,30 +179,29 @@ def compare_pipelines(
         # ====================================================================
         # EXPERIMENTO 3: PSO-PARALELO
         # ====================================================================
-        if use_pso:
-            print("\n" + "-" * 80)
-            print("[PSO-PARALELO] Iniciando...")
-            print("-" * 80)
+        print("\n" + "-" * 80)
+        print("[PSO-PARALELO] Iniciando...")
+        print("-" * 80)
+        
+        try:
+            train_now = train_models and (size == sizes[-1])
             
-            try:
-                train_now = train_models and (size == sizes[-1])
+            _, pso_total_time, pso_stats = vectorize_with_pso_load_balancing(
+                df_subset,
+                config=pso_config,
+                verbose=verbose,
+                train_model=train_now
+            )
+            experiment_result['pso_time'] = pso_total_time
+            if train_now and 'mlp_stats' in pso_stats:
+                experiment_result['pso_accuracy'] = pso_stats['mlp_stats']['accuracy']
                 
-                _, pso_total_time, pso_stats = vectorize_with_pso_load_balancing(
-                    df_subset,
-                    config=pso_config,
-                    verbose=verbose,
-                    train_model=train_now
-                )
-                experiment_result['pso_time'] = pso_total_time
-                if train_now and 'mlp_stats' in pso_stats:
-                    experiment_result['pso_accuracy'] = pso_stats['mlp_stats']['accuracy']
-                    
-                print(f"✓ [PSO-PARALELO] Completado en {pso_total_time:.2f}s")
-            except Exception as e:
-                print(f"✗ [PSO-PARALELO] Error: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+            print(f"✓ [PSO-PARALELO] Completado en {pso_total_time:.2f}s")
+        except Exception as e:
+            print(f"✗ [PSO-PARALELO] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
         
         # ====================================================================
         # CALCULAR MÉTRICAS
@@ -235,14 +221,14 @@ def compare_pipelines(
         else:
             print("  GA Speedup: N/A")
         
-        if use_pso and not np.isnan(pso_time) and not np.isnan(seq_time) and seq_time > 0:
+        if not np.isnan(pso_time) and not np.isnan(seq_time) and seq_time > 0:
             pso_speedup = seq_time / pso_time
             experiment_result['pso_speedup'] = pso_speedup
             print(f"  PSO Speedup: {pso_speedup:.2f}x")
         else:
             print("  PSO Speedup: N/A")
         
-        if (use_pso and not np.isnan(ga_time) and not np.isnan(pso_time) and
+        if (not np.isnan(ga_time) and not np.isnan(pso_time) and
             ga_time > 0 and pso_time > 0):
             
             if ga_time < pso_time:
@@ -262,8 +248,7 @@ def compare_pipelines(
         print(f"  Tamaño: {size:,} tweets")
         print(f"  Secuencial: {seq_time:.2f}s")
         print(f"  GA-Paralelo: {ga_time:.2f}s (speedup: {experiment_result['ga_speedup']:.2f}x)")
-        if use_pso:
-            print(f"  PSO-Paralelo: {pso_time:.2f}s (speedup: {experiment_result['pso_speedup']:.2f}x)")
+        print(f"  PSO-Paralelo: {pso_time:.2f}s (speedup: {experiment_result['pso_speedup']:.2f}x)")
     
     # ========================================================================
     # GENERAR DATAFRAME
@@ -311,10 +296,9 @@ def compare_pipelines(
             marker='s', linewidth=2, markersize=8,
             label='GA-Paralelo', color='#3498db')
     
-    if use_pso:
-        plt.plot(df_results['size'], df_results['pso_time'],
-                marker='^', linewidth=2, markersize=8,
-                label='PSO-Paralelo', color='#2ecc71')
+    plt.plot(df_results['size'], df_results['pso_time'],
+            marker='^', linewidth=2, markersize=8,
+            label='PSO-Paralelo', color='#2ecc71')
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Tiempo de Ejecución (segundos)', fontsize=12)
@@ -350,10 +334,9 @@ def compare_pipelines(
             marker='s', linewidth=2, markersize=8,
             label='GA-Paralelo', color='#3498db')
     
-    if use_pso:
-        plt.plot(df_results['size'], df_results['pso_speedup'],
-                marker='^', linewidth=2, markersize=8,
-                label='PSO-Paralelo', color='#2ecc71')
+    plt.plot(df_results['size'], df_results['pso_speedup'],
+            marker='^', linewidth=2, markersize=8,
+            label='PSO-Paralelo', color='#2ecc71')
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Speedup (veces más rápido que secuencial)', fontsize=12)
@@ -398,8 +381,8 @@ if __name__ == '__main__':
     DATA_FILE = 'Suicide_Detection.csv'
     SIZES = list(range(20_000, 200_001, 20_000))
     
-    GA_TEST_CONFIG = GA_CONFIG
-    PSO_TEST_CONFIG = PSO_CONFIG if PSO_AVAILABLE else None
+    GA_TEST_CONFIG = GA_CONFIG if GA_CONFIG else None
+    PSO_TEST_CONFIG = PSO_CONFIG if PSO_CONFIG else None
     
     # Verificar requisitos
     print("=" * 80)
@@ -411,14 +394,6 @@ if __name__ == '__main__':
         sys.exit(1)
     
     print(f"✓ Archivo de datos encontrado: {DATA_FILE}")
-    print(f"✓ Módulo secuencial disponible")
-    print(f"✓ Módulo GA disponible")
-    
-    if PSO_AVAILABLE:
-        print(f"✓ Módulo PSO disponible")
-    else:
-        print(f"⚠ Módulo PSO no disponible (se omitirá)")
-    
     print(f"\nConfiguración del experimento:")
     print(f"  • Tamaños a probar: {len(SIZES)} batches")
     print(f"  • Rango: {SIZES[0]:,} - {SIZES[-1]:,} tweets")
@@ -450,7 +425,6 @@ if __name__ == '__main__':
             output_speedup_png='comparison_speedup.png',
             ga_config=GA_TEST_CONFIG,
             pso_config=PSO_TEST_CONFIG,
-            enable_pso=PSO_AVAILABLE,
             verbose=VERBOSE_MODE,
             train_models=TRAIN_MODELS
         )
