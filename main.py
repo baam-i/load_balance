@@ -18,6 +18,7 @@ warnings.filterwarnings('ignore', category=UserWarning)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 
 # Importar pipelines
 from GA import vectorize_with_ga_load_balancing, GA_CONFIG
@@ -34,8 +35,8 @@ def compare_pipelines(
     output_csv: str = "comparison_times.csv",
     output_png: str = "comparison_times.png",
     output_speedup_png: str = "comparison_speedup.png",
-    ga_config: Dict[str, Any] = GA_CONFIG.copy(),
-    pso_config: Dict[str, Any] = PSO_CONFIG.copy(),
+    ga_config: Dict[str, Any] = GA_CONFIG,
+    pso_config: Dict[str, Any] = PSO_CONFIG,
     verbose: bool = False,
     train_models: bool = False
 ) -> pd.DataFrame:
@@ -56,12 +57,6 @@ def compare_pipelines(
     Returns:
         DataFrame con resultados
     """
-    
-    if ga_config is None:
-        ga_config = GA_CONFIG.copy()
-    
-    if pso_config is None:
-        pso_config = PSO_CONFIG.copy()
     
     # ========================================================================
     # CARGAR DATASET
@@ -381,8 +376,8 @@ if __name__ == '__main__':
     DATA_FILE = 'Suicide_Detection.csv'
     SIZES = list(range(20_000, 200_001, 20_000))
     
-    GA_TEST_CONFIG = GA_CONFIG if GA_CONFIG else None
-    PSO_TEST_CONFIG = PSO_CONFIG if PSO_CONFIG else None
+    GA_TEST_CONFIG = GA_CONFIG
+    PSO_TEST_CONFIG = PSO_CONFIG
     
     # Verificar requisitos
     print("=" * 80)

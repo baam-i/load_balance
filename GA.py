@@ -44,7 +44,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score, classification_report
 import matplotlib.pyplot as plt
-import seaborn as sns
+import seaborn as sns # type: ignore
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
@@ -201,7 +201,8 @@ def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[
     # Retornar lista de tuplas (índice_original, vector)
     result = []
     for i, original_idx in enumerate(original_indices):
-        result.append((original_idx, X_chunk[i, :]))
+        # result.append((original_idx, X_chunk[i, :]))
+        result.append((original_idx, X_chunk.getrow(i)))
     
     return result
 
@@ -753,7 +754,7 @@ def track_ga_evolution(population: List[TaskMapping],
 
 def vectorize_with_ga_load_balancing(
     df,
-    config: Dict[str, Any] = None,
+    config: Dict[str, Any] = GA_CONFIG,
     verbose: bool = False,
     train_model: bool = False
 ) -> Tuple[Any, float, Dict[str, Any]]:
@@ -761,8 +762,6 @@ def vectorize_with_ga_load_balancing(
     Vectorización TF-IDF con balanceo de carga basado en GA
     VERSIÓN CON EMPAREJAMIENTO EXPLÍCITO VECTOR-ETIQUETA
     """
-    if config is None:
-        config = GA_CONFIG.copy()
     
     num_cores = config['num_cores']
     texts = df["text"].tolist()
@@ -966,7 +965,8 @@ def vectorize_with_ga_load_balancing(
         print(f"  ✅ Etiquetas emparejadas: {len(y_aligned)}")
         print(f"  - Forma de X: {X.shape}")
         print(f"  - Forma de y: {y_aligned.shape}")
-        print(f"  - ¿Coinciden?: {'✅ SÍ' if X.shape[0] == y_aligned.shape[0] else '❌ NO'}")
+        if X.shape is not None and y_aligned.shape is not None:
+            print(f"  - ¿Coinciden?: {'✅ SÍ' if X.shape[0] == y_aligned.shape[0] else '❌ NO'}")
         
         # Verificar distribución de clases
         unique, counts = np.unique(y_aligned, return_counts=True)
