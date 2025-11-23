@@ -89,6 +89,7 @@ def compare_pipelines(
     print(f"✓ Configuración GA: {ga_config['num_cores']} cores, "
           f"{ga_config['population_size']} población, "
           f"{ga_config['num_generations']} generaciones")
+    print(f"  (con subtareas: {4 * ga_config['num_cores']} subtareas/tarea para mejor balanceo)")
     
     print(f"✓ Configuración PSO: {pso_config['num_cores']} cores, "
             f"{pso_config['num_particles']} partículas, "
@@ -165,6 +166,16 @@ def compare_pipelines(
             if train_now and 'mlp_stats' in ga_stats:
                 experiment_result['ga_accuracy'] = ga_stats['mlp_stats']['accuracy']
             print(f"✓ [GA-PARALELO] Completado en {ga_total_time:.2f}s")
+            
+            # Mostrar info de subtareas si está disponible
+            if verbose and 'num_subtasks' in ga_stats:
+                print(f"  - Tareas: {ga_stats.get('num_tasks', 'N/A')}")
+                print(f"  - Subtareas: {ga_stats['num_subtasks']} "
+                      f"({ga_stats.get('subtasks_per_task', 'N/A')} por tarea)")
+                print(f"  - Tiempo GA: {ga_stats.get('ga_time', 0):.2f}s "
+                      f"({ga_stats.get('ga_time', 0)/ga_total_time*100:.1f}%)")
+                print(f"  - Tiempo vectorización: {ga_stats.get('vectorization_time', 0):.2f}s "
+                      f"({ga_stats.get('vectorization_time', 0)/ga_total_time*100:.1f}%)")
         except Exception as e:
             print(f"✗ [GA-PARALELO] Error: {e}")
             import traceback

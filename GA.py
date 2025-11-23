@@ -87,6 +87,25 @@ class Task:
 
 
 @dataclass
+class Subtask:
+    """
+    Representa una subtarea - subdivisión de una tarea para mejor balanceo
+    
+    Attributes:
+        subtask_id: Identificador único de la subtarea
+        texts: Lista de textos a procesar
+        size: Complejidad estimada
+        original_indices: Lista de índices originales en el dataset
+        parent_task_id: ID de la tarea padre
+    """
+    subtask_id: int
+    texts: List[str]
+    size: int
+    original_indices: List[int]
+    parent_task_id: int
+
+
+@dataclass
 class ProcessorState:
     """
     Estado actual de un procesador en el sistema
@@ -195,6 +214,10 @@ def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[
     if not texts or not original_indices:
         return []
     
+    # Validar que el número de textos coincida con el número de índices
+    if len(texts) != len(original_indices):
+        raise ValueError(f"Mismatch: {len(texts)} texts but {len(original_indices)} indices")
+    
     # Vectorizar el chunk completo
     X_chunk = vectorizer.transform(texts)
     
@@ -209,6 +232,65 @@ def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[
 def calculate_optimal_chunk_size(total_texts: int, num_cores: int) -> int:
     chunk_size = total_texts // 10
     return chunk_size
+
+
+def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> List[Subtask]:
+    """
+    Subdivide una tarea en múltiples subtareas de tamaño aleatorio
+    
+    Args:
+        task: Tarea a subdividir
+        num_subtasks: Número de subtareas a crear (recomendado: 4 * num_cores)
+        task_id: ID de la tarea padre
+        
+    Returns:
+        Lista de subtareas con tamaños aleatorios que suman el total de la tarea
+    """
+    total_texts = len(task.texts)
+    
+    # Si la tarea es muy pequeña, crear una sola subtarea
+    if total_texts < num_subtasks:
+        return [Subtask(
+            subtask_id=0,
+            texts=task.texts,
+            size=task.size,
+            original_indices=task.original_indices,
+            parent_task_id=task_id
+        )]
+    
+    # Generar pesos aleatorios para cada subtarea
+    weights = np.random.random(num_subtasks)
+    weights = weights / weights.sum()  # Normalizar a suma 1.0
+    
+    # Calcular tamaños de subtareas (número de textos)
+    subtask_sizes = (weights * total_texts).astype(int)
+    
+    # Ajustar el último para que la suma sea exacta
+    subtask_sizes[-1] = total_texts - subtask_sizes[:-1].sum()
+    
+    # Crear subtareas
+    subtasks = []
+    current_idx = 0
+    
+    for i, size in enumerate(subtask_sizes):
+        if size <= 0:
+            continue
+            
+        end_idx = current_idx + size
+        subtask_texts = task.texts[current_idx:end_idx]
+        subtask_indices = task.original_indices[current_idx:end_idx]
+        
+        subtask = Subtask(
+            subtask_id=i,
+            texts=subtask_texts,
+            size=estimate_task_complexity(subtask_texts),
+            original_indices=subtask_indices,
+            parent_task_id=task_id
+        )
+        subtasks.append(subtask)
+        current_idx = end_idx
+    
+    return subtasks
 
 # ============================================================================
 # ALGORITMO GENÉTICO
@@ -270,10 +352,19 @@ class GeneticLoadBalancer:
             population.append(mapping)
         return population
 
-    def calculate_fitness(self, mapping: TaskMapping, tasks: List[Task],
+    def calculate_fitness(self, mapping: TaskMapping, tasks,
                         processor_states: List[ProcessorState]) -> float:
         """
+        Calcula el fitness de un mapeo de tareas/subtareas a procesadores
         Versión CORREGIDA con normalización relativa
+        
+        Args:
+            mapping: Mapeo de tareas a procesadores
+            tasks: Lista de tareas o subtareas (cualquier objeto con atributo 'size')
+            processor_states: Estado actual de cada procesador
+            
+        Returns:
+            Valor de fitness en el rango [0, 1]
         """
         num_tasks = len(tasks)
         mapping.validate_and_fix(num_tasks)
@@ -382,7 +473,8 @@ class GeneticLoadBalancer:
     def cycle_crossover(self, parent1: TaskMapping,
                        parent2: TaskMapping, num_tasks: int) -> Tuple[TaskMapping, TaskMapping]:
         """
-        Cruce por ciclo (Cycle Crossover)
+        Cruce por ciclo (Cycle Crossover) - VERSIÓN CORREGIDA
+        Asegura que cada tarea se asigne exactamente una vez
         
         Args:
             parent1: Primer padre
@@ -395,33 +487,40 @@ class GeneticLoadBalancer:
         child1 = TaskMapping(self.num_processors)
         child2 = TaskMapping(self.num_processors)
 
-        # Aplanar asignaciones a 1D
-        p1_flat = []
-        p2_flat = []
-
-        for proc_tasks in parent1.assignment:
-            p1_flat.extend(proc_tasks)
-        for proc_tasks in parent2.assignment:
-            p2_flat.extend(proc_tasks)
-
-        if len(p1_flat) == 0 or len(p1_flat) != len(p2_flat):
-            return parent1.copy(), parent2.copy()
-
-        n = len(p1_flat)
-        mask = np.random.random(n) < 0.5
-
-        c1_flat = [p1_flat[i] if mask[i] else p2_flat[i] for i in range(n)]
-        c2_flat = [p2_flat[i] if mask[i] else p1_flat[i] for i in range(n)]
-
-        for i, task_id in enumerate(c1_flat):
-            if 0 <= task_id < num_tasks:
-                proc = i % self.num_processors
-                child1.assign_task(proc, task_id)
-
-        for i, task_id in enumerate(c2_flat):
-            if 0 <= task_id < num_tasks:
-                proc = i % self.num_processors
-                child2.assign_task(proc, task_id)
+        # Para cada tarea, decidir qué padre seguir
+        # Esto asegura que cada tarea se asigne exactamente una vez
+        for task_id in range(num_tasks):
+            # Encontrar en qué procesador está cada tarea en cada padre
+            parent1_proc = None
+            parent2_proc = None
+            
+            for proc_id in range(self.num_processors):
+                if task_id in parent1.get_processor_tasks(proc_id):
+                    parent1_proc = proc_id
+                if task_id in parent2.get_processor_tasks(proc_id):
+                    parent2_proc = proc_id
+            
+            # Si la tarea está en ambos padres, elegir aleatoriamente
+            if parent1_proc is not None and parent2_proc is not None:
+                if np.random.random() < 0.5:
+                    child1.assign_task(parent1_proc, task_id)
+                    child2.assign_task(parent2_proc, task_id)
+                else:
+                    child1.assign_task(parent2_proc, task_id)
+                    child2.assign_task(parent1_proc, task_id)
+            elif parent1_proc is not None:
+                # Solo está en parent1
+                child1.assign_task(parent1_proc, task_id)
+                child2.assign_task(parent1_proc, task_id)
+            elif parent2_proc is not None:
+                # Solo está en parent2
+                child1.assign_task(parent2_proc, task_id)
+                child2.assign_task(parent2_proc, task_id)
+            else:
+                # No está en ninguno, asignar aleatoriamente
+                random_proc = np.random.randint(0, self.num_processors)
+                child1.assign_task(random_proc, task_id)
+                child2.assign_task(random_proc, task_id)
 
         return child1, child2
 
@@ -474,19 +573,22 @@ class GeneticLoadBalancer:
 
         return mutated
 
-    def evolve(self, tasks: List[Task],
+    def evolve(self, tasks,
             processor_states: List[ProcessorState],
             verbose: bool = False) -> TaskMapping:
         """
         Ciclo principal de evolución del Algoritmo Genético
         
         Args:
-            tasks: Lista de todas las tareas a asignar
+            tasks: Lista de todas las tareas/subtareas a asignar (Task o Subtask)
             processor_states: Estado actual de cada procesador
             verbose: Si True, muestra progreso generación por generación
             
         Returns:
             Mejor mapeo encontrado
+        
+        Nota: Este método funciona genéricamente con cualquier objeto que tenga
+        el atributo 'size', por lo que puede procesar tanto Task como Subtask.
         """
         num_tasks = len(tasks)
 
@@ -556,14 +658,14 @@ class GeneticLoadBalancer:
 # FUNCIONES DE VISUALIZACIÓN Y DEBUG
 # ============================================================================
 
-def print_distribution_stats(mapping: TaskMapping, tasks: List[Task], 
+def print_distribution_stats(mapping: TaskMapping, tasks, 
                             num_cores: int, show_details: bool = True):
     """
-    Muestra estadísticas detalladas de la distribución de tareas
+    Muestra estadísticas detalladas de la distribución de tareas/subtareas
     
     Args:
         mapping: Mapeo de tareas a procesadores
-        tasks: Lista de todas las tareas
+        tasks: Lista de todas las tareas o subtareas (cualquier objeto con 'size')
         num_cores: Número de cores
         show_details: Si True, muestra detalle por core
     """
@@ -704,7 +806,20 @@ def vectorize_with_ga_load_balancing(
 ) -> Tuple[Any, float, Dict[str, Any]]:
     """
     Vectorización TF-IDF con balanceo de carga basado en GA
-    VERSIÓN CON EMPAREJAMIENTO EXPLÍCITO VECTOR-ETIQUETA
+    VERSIÓN CON SUBTAREAS Y EMPAREJAMIENTO EXPLÍCITO VECTOR-ETIQUETA
+    
+    Esta función subdivide cada tarea en subtareas de tamaño aleatorio
+    (4 * num_cores subtareas por tarea) para dar al GA más flexibilidad
+    en la distribución de carga y mejorar el balanceo.
+    
+    Args:
+        df: DataFrame con columna 'text' y opcionalmente 'class'
+        config: Configuración del GA
+        verbose: Si True, muestra información detallada
+        train_model: Si True, entrena un modelo MLP
+        
+    Returns:
+        Tupla (X, tiempo_total, estadisticas)
     """
     
     num_cores = config['num_cores']
@@ -746,6 +861,38 @@ def vectorize_with_ga_load_balancing(
     num_tasks_total = len(tasks)
     print(f"  Total de tareas: {num_tasks_total}")
     
+    # Subdividir tareas en subtareas para mejor balanceo
+    num_subtasks_per_task = 4 * num_cores
+    print(f"  Subtareas por tarea: {num_subtasks_per_task}")
+    print(f"\n  Creando subtareas con tamanos aleatorios...")
+    
+    all_subtasks = []
+    all_subtask_text_counts = []
+    
+    for task_id, task in enumerate(tasks):
+        subtasks = create_subtasks_from_task(task, num_subtasks_per_task, task_id)
+        all_subtasks.extend(subtasks)
+        
+        # Registrar tamanos de las subtareas
+        text_counts = [len(st.texts) for st in subtasks]
+        all_subtask_text_counts.extend(text_counts)
+        
+        # Mostrar info de la primera tarea como ejemplo
+        if task_id == 0:
+            print(f"\n  Tarea {task_id} (ejemplo):")
+            print(f"    Textos en tarea: {len(task.texts)}")
+            print(f"    Subtareas creadas: {len(subtasks)}")
+            print(f"    Tamanos (num de textos): min={min(text_counts)}, max={max(text_counts)}, avg={sum(text_counts)/len(text_counts):.1f}")
+            print(f"    Primeras 10 subtareas: {text_counts[:10]}")
+    
+    num_subtasks_total = len(all_subtasks)
+    print(f"\n  Total de subtareas: {num_subtasks_total}")
+    print(f"  Estadisticas de tamanos de subtareas:")
+    print(f"    Min textos: {min(all_subtask_text_counts)}")
+    print(f"    Max textos: {max(all_subtask_text_counts)}")
+    print(f"    Promedio: {sum(all_subtask_text_counts)/len(all_subtask_text_counts):.1f}")
+    print(f"    Mediana: {sorted(all_subtask_text_counts)[len(all_subtask_text_counts)//2]}")
+    
     # Inicializar estados de procesador
     processor_states = [
         ProcessorState(processor_id=i, current_load=0.0, queue=[])
@@ -759,10 +906,12 @@ def vectorize_with_ga_load_balancing(
     stats: Dict[str, Any] = {
         'total_texts': total_texts,
         'num_tasks': num_tasks_total,
+        'num_subtasks': num_subtasks_total,
         'num_cores': num_cores,
         'ga_generations': config['num_generations'],
         'ga_population': config['population_size'],
         'chunk_size': chunk_size,
+        'subtasks_per_task': num_subtasks_per_task,
         'ga_time': 0.0,
         'vectorization_time': 0.0,
         'total_time': 0.0
@@ -775,26 +924,31 @@ def vectorize_with_ga_load_balancing(
     # ========================================================================
     indexed_vectors = []  # Lista de (idx, vector)
     
-    processed_tasks = 0
-    chunk_count = 0
+    processed_subtasks = 0
+    window_count = 0
     
-    while processed_tasks < num_tasks_total:
-        window_beginning = chunk_count * chunk_size
-        chunk_count += 1
-        window_end = min((chunk_count * chunk_size) - 1, num_tasks_total)
-        window_tasks = tasks[window_beginning:window_end]
+    # Procesar subtareas en ventanas
+    # Usamos un tamaño de ventana basado en el número de subtareas
+    window_size = num_subtasks_per_task * 2  # Procesar 2 tareas de subtareas a la vez
+    
+    while processed_subtasks < num_subtasks_total:
+        window_start = processed_subtasks
+        window_end = min(processed_subtasks + window_size, num_subtasks_total)
+        window_subtasks = all_subtasks[window_start:window_end]
         
-        # Ejecutar GA        
+        print(f"\n  Procesando ventana {window_count + 1} (subtareas {window_start}-{window_end})...")
+        
+        # Ejecutar GA con subtareas
         ga_start = time.time()
-        best_mapping = ga.evolve(window_tasks, processor_states, verbose=verbose)
+        best_mapping = ga.evolve(window_subtasks, processor_states, verbose=verbose)
         ga_time = time.time() - ga_start
         stats['ga_time'] += ga_time
         
-        print(f"(GA: {ga_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", end=" ")
+        print(f"  (GA: {ga_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", end=" ")
         
         if verbose:
             print()
-            print_distribution_stats(best_mapping, window_tasks, num_cores, show_details=True)
+            print_distribution_stats(best_mapping, window_subtasks, num_cores, show_details=True)
         
         # Ejecutar vectorización
         vec_start = time.time()
@@ -804,21 +958,21 @@ def vectorize_with_ga_load_balancing(
         processor_indices = [[] for _ in range(num_cores)]
         
         for proc_id in range(num_cores):
-            task_indices = best_mapping.get_processor_tasks(proc_id)
-            for local_tid in task_indices:
-                if 0 <= local_tid < len(window_tasks):
-                    task = window_tasks[local_tid]
-                    processor_work[proc_id].append(task)
-                    processor_indices[proc_id].extend(task.original_indices)
+            subtask_indices = best_mapping.get_processor_tasks(proc_id)
+            for local_sid in subtask_indices:
+                if 0 <= local_sid < len(window_subtasks):
+                    subtask = window_subtasks[local_sid]
+                    processor_work[proc_id].append(subtask)
+                    processor_indices[proc_id].extend(subtask.original_indices)
         
         work_args = [
             (
-                [text for task in proc_tasks for text in task.texts],
+                [text for subtask in proc_subtasks for text in subtask.texts],
                 vectorizer,
                 proc_indices
             )
-            for proc_tasks, proc_indices in zip(processor_work, processor_indices)
-            if proc_tasks
+            for proc_subtasks, proc_indices in zip(processor_work, processor_indices)
+            if proc_subtasks
         ]
         
         if work_args:
@@ -843,33 +997,19 @@ def vectorize_with_ga_load_balancing(
             processor_states[proc_id].current_load = 0.0
             processor_states[proc_id].queue.clear()
         
-        processed_tasks = window_end
+        processed_subtasks = window_end
+        window_count += 1
     
     # ========================================================================
     # ⭐ RECONSTRUIR X EN CUALQUIER ORDEN (no importa)
     # ========================================================================
     print(f"  Reconstruyendo matriz...")
-    print(f"  - Vectores obtenidos: {len(indexed_vectors)}")
-    print(f"  - Vectores esperados: {total_texts}")
-    
-    # Verificar que tengamos todos los vectores
-    obtained_indices = set(idx for idx, _ in indexed_vectors)
-    expected_indices = set(range(total_texts))
-    
-    missing = expected_indices - obtained_indices
-    if missing:
-        print(f"  ⚠️  Faltan {len(missing)} vectores")
-        print(f"      Primeros faltantes: {sorted(list(missing))[:10]}")
-    
-    duplicates = len(indexed_vectors) - len(obtained_indices)
-    if duplicates > 0:
-        print(f"  ⚠️  Hay {duplicates} vectores duplicados")
     
     # Construir matriz X (en cualquier orden)
     vectors_list = [vec for _, vec in indexed_vectors]
     X = vstack(vectors_list)
     
-    print(f"  ✅ Matriz construida: {X.shape}")
+    print(f"  OK: Matriz construida: {X.shape} ({len(indexed_vectors)} vectores)")
     
     total_time = time.time() - start_total
     stats['total_time'] = total_time
@@ -896,11 +1036,11 @@ def vectorize_with_ga_load_balancing(
         for i, (original_idx, _) in enumerate(indexed_vectors):
             y_aligned[i] = y_original[original_idx]
         
-        print(f"  ✅ Etiquetas emparejadas: {len(y_aligned)}")
+        print(f"  OK: Etiquetas emparejadas: {len(y_aligned)}")
         print(f"  - Forma de X: {X.shape}")
         print(f"  - Forma de y: {y_aligned.shape}")
         if X.shape is not None and y_aligned.shape is not None:
-            print(f"  - ¿Coinciden?: {'✅ SÍ' if X.shape[0] == y_aligned.shape[0] else '❌ NO'}")
+            print(f"  - Coinciden?: {'SI' if X.shape[0] == y_aligned.shape[0] else 'NO'}")
         
         # Verificar distribución de clases
         unique, counts = np.unique(y_aligned, return_counts=True)
