@@ -7,28 +7,7 @@ Balanceo de Carga Dinámico Basado en Algoritmos Genéticos para Vectorización 
 Basado en: "Observations on Using Genetic Algorithms for Dynamic Load-Balancing"
 por Zomaya & Teh (2001)
 
-CONCEPTO PRINCIPAL DEL ARTÍCULO:
---------------------------------
-El artículo propone usar Algoritmos Genéticos (GA) para asignar tareas 
-dinámicamente a procesadores en sistemas paralelos. Los objetivos son:
-
-1. MINIMIZAR el tiempo total de ejecución (makespan)
-2. MAXIMIZAR la utilización de procesadores 
-3. BALANCEAR la carga entre procesadores
-
-COMPONENTES CLAVE (del artículo):
----------------------------------
-- Ventana deslizante (Sección 4.1): Procesar tareas conforme llegan
-- Política de umbrales (Sección 5.4): Determinar procesadores sobrecargados
-- Cromosoma bidimensional (Sección 4.2): Mapeo de tareas a procesadores
-- Función de fitness triple (Sección 4.3-4.7): Combinar múltiples objetivos
-- Operadores genéticos (Sección 4.8): Selección, cruce y mutación
-
-APLICACIÓN EN ESTE CÓDIGO:
---------------------------
-Aplicamos el GA del artículo al problema de vectorización TF-IDF de textos,
-donde cada "tarea" es un chunk de textos a vectorizar, y cada "procesador"
-es un core de CPU en un sistema multicore.
+VERSIÓN MEJORADA: Enfoque en UTILIZACIÓN de cores en lugar de balance de carga
 """
 
 import numpy as np
@@ -45,18 +24,16 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns # type: ignore
+
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
 
-# Palabras vacías para preprocesamiento de texto
 STOP_WORDS = {"the", "and", "is", "in", "at", "of", "a", "to", "for", "on",
               "it", "this", "that"}
 
-# Detectar todos los cores disponibles en el sistema
 AVAILABLE_CORES = cpu_count()
 
-# Parámetros del Algoritmo Genético
 GA_CONFIG = {
     'population_size': 30,
     'num_generations': 10,
@@ -73,14 +50,7 @@ GA_CONFIG = {
 
 @dataclass
 class Task:
-    """
-    Representa una tarea de vectorización (chunk de textos)
-    
-    Attributes:
-        task_id: Identificador único de la tarea
-        texts: Lista de textos a procesar
-        size: Complejidad estimada
-    """
+    """Representa una tarea de vectorización (chunk de textos)"""
     texts: List[str]
     size: int
     original_indices: List[int]
@@ -88,16 +58,7 @@ class Task:
 
 @dataclass
 class Subtask:
-    """
-    Representa una subtarea - subdivisión de una tarea para mejor balanceo
-    
-    Attributes:
-        subtask_id: Identificador único de la subtarea
-        texts: Lista de textos a procesar
-        size: Complejidad estimada
-        original_indices: Lista de índices originales en el dataset
-        parent_task_id: ID de la tarea padre
-    """
+    """Representa una subtarea - subdivisión de una tarea"""
     subtask_id: int
     texts: List[str]
     size: int
@@ -107,14 +68,7 @@ class Subtask:
 
 @dataclass
 class ProcessorState:
-    """
-    Estado actual de un procesador en el sistema
-    
-    Attributes:
-        processor_id: Identificador del procesador
-        current_load: Carga actualmente en ejecución
-        queue: Cola de tareas asignadas
-    """
+    """Estado actual de un procesador en el sistema"""
     processor_id: int
     current_load: float
     queue: List[Task]
@@ -125,11 +79,7 @@ class ProcessorState:
 
 
 class TaskMapping:
-    """
-    Representa un cromosoma - mapeo completo de tareas a procesadores
-    
-    Del artículo (Sección 4.2): "Codificación bidimensional"
-    """
+    """Representa un cromosoma - mapeo completo de tareas a procesadores"""
 
     def __init__(self, num_processors: int):
         """Inicializa un mapeo vacío"""
@@ -166,15 +116,7 @@ class TaskMapping:
 # ============================================================================
 
 def process_text(text: str) -> List[str]:
-    """
-    Preprocesamiento de texto con expresiones regulares
-    
-    Args:
-        text: Texto crudo a procesar
-        
-    Returns:
-        Lista de tokens limpios
-    """
+    """Preprocesamiento de texto con expresiones regulares"""
     text = text.lower()
     text = re.sub(r'http\S+|www.\S+', '', text)
     text = re.sub(r"[^a-z\s]", "", text)
@@ -184,15 +126,7 @@ def process_text(text: str) -> List[str]:
 
 
 def estimate_task_complexity(texts: List[str]) -> int:
-    """
-    Estima el tiempo de procesamiento para un chunk de textos
-    
-    Args:
-        texts: Lista de textos en el chunk
-        
-    Returns:
-        Complejidad estimada
-    """
+    """Estima el tiempo de procesamiento para un chunk de textos"""
     if not texts:
         return 1
     
@@ -203,25 +137,17 @@ def estimate_task_complexity(texts: List[str]) -> int:
 
 
 def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[Tuple[int, Any]]:
-    """
-    Worker para vectorizar un chunk
-    
-    Returns:
-        Lista de tuplas (indice_original, vector_fila)
-    """
+    """Worker para vectorizar un chunk"""
     texts, vectorizer, original_indices = args
     
     if not texts or not original_indices:
         return []
     
-    # Validar que el número de textos coincida con el número de índices
     if len(texts) != len(original_indices):
         raise ValueError(f"Mismatch: {len(texts)} texts but {len(original_indices)} indices")
     
-    # Vectorizar el chunk completo
     X_chunk = vectorizer.transform(texts)
     
-    # Retornar lista de tuplas (índice_original, vector)
     result = []
     for i, original_idx in enumerate(original_indices):
         result.append((original_idx, X_chunk.getrow(i)))
@@ -235,20 +161,9 @@ def calculate_optimal_chunk_size(total_texts: int, num_cores: int) -> int:
 
 
 def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> List[Subtask]:
-    """
-    Subdivide una tarea en múltiples subtareas de tamaño aleatorio
-    
-    Args:
-        task: Tarea a subdividir
-        num_subtasks: Número de subtareas a crear (recomendado: 4 * num_cores)
-        task_id: ID de la tarea padre
-        
-    Returns:
-        Lista de subtareas con tamaños aleatorios que suman el total de la tarea
-    """
+    """Subdivide una tarea en múltiples subtareas de tamaño aleatorio"""
     total_texts = len(task.texts)
     
-    # Si la tarea es muy pequeña, crear una sola subtarea
     if total_texts < num_subtasks:
         return [Subtask(
             subtask_id=0,
@@ -258,17 +173,12 @@ def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> Li
             parent_task_id=task_id
         )]
     
-    # Generar pesos aleatorios para cada subtarea
     weights = np.random.random(num_subtasks)
-    weights = weights / weights.sum()  # Normalizar a suma 1.0
+    weights = weights / weights.sum()
     
-    # Calcular tamaños de subtareas (número de textos)
     subtask_sizes = (weights * total_texts).astype(int)
-    
-    # Ajustar el último para que la suma sea exacta
     subtask_sizes[-1] = total_texts - subtask_sizes[:-1].sum()
     
-    # Crear subtareas
     subtasks = []
     current_idx = 0
     
@@ -292,17 +202,15 @@ def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> Li
     
     return subtasks
 
+
 # ============================================================================
-# ALGORITMO GENÉTICO
+# ALGORITMO GENÉTICO - ENFOCADO EN UTILIZACIÓN
 # ============================================================================
 
 class GeneticLoadBalancer:
     """
     Algoritmo Genético para Balanceo de Carga Dinámico
-    
-    Del artículo: "Un algoritmo de balanceo de carga dinámico se desarrolla
-    mediante el cual asignaciones de tareas óptimas o casi óptimas pueden
-    'evolucionar' durante la operación del sistema."
+    VERSIÓN MEJORADA: Maximiza utilización uniforme de cores
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -315,144 +223,162 @@ class GeneticLoadBalancer:
         self.L = self.config['light_multiplier']
         self.mutation_rate = self.config['mutation_rate']
 
-    def initialize_population(self, num_tasks: int) -> List[TaskMapping]:
+    def initialize_population(self, num_tasks: int, 
+                             processor_states: List[ProcessorState]) -> List[TaskMapping]:
         """
-        Inicializa población con diferentes estrategias de asignación
-        
-        Args:
-            num_tasks: Número total de tareas a asignar
-            
-        Returns:
-            Lista de mappings (cromosomas) iniciales
+        Inicializa población con estrategias conscientes de utilización
         """
         population = []
+        
+        current_loads = [ps.total_load() for ps in processor_states]
+        max_load = max(current_loads) if current_loads else 1.0
+        
+        if max_load > 0:
+            inverse_loads = [max_load - load for load in current_loads]
+            total_inverse = sum(inverse_loads)
+            
+            if total_inverse > 0:
+                probabilities = [inv / total_inverse for inv in inverse_loads]
+            else:
+                probabilities = [1.0 / self.num_processors] * self.num_processors
+        else:
+            probabilities = [1.0 / self.num_processors] * self.num_processors
 
         for i in range(self.population_size):
             mapping = TaskMapping(self.num_processors)
+            
             if i == 0:
-                # Estrategia 1: Round-robin puro
+                # ESTRATEGIA 1: GREEDY - Asignar siempre al menos cargado
                 for task_idx in range(num_tasks):
-                    processor = task_idx % self.num_processors
-                    mapping.assign_task(processor, task_idx)
+                    loads_in_mapping = [
+                        current_loads[p] + len(mapping.get_processor_tasks(p))
+                        for p in range(self.num_processors)
+                    ]
+                    least_loaded = np.argmin(loads_in_mapping)
+                    mapping.assign_task(least_loaded, task_idx)
                     
             elif i == 1:
-                # Estrategia 2: Asignación balanceada por bloques
-                tasks_per_proc = num_tasks // self.num_processors
-                for proc_id in range(self.num_processors):
-                    start = proc_id * tasks_per_proc
-                    end = start + tasks_per_proc if proc_id < self.num_processors - 1 else num_tasks
-                    for task_idx in range(start, end):
-                        mapping.assign_task(proc_id, task_idx)
-                        
-            else:
-                # Estrategia 3: Asignación completamente aleatoria
+                # ESTRATEGIA 2: WEIGHTED RANDOM - Probabilidad inversa a carga
                 for task_idx in range(num_tasks):
-                    processor = np.random.randint(0, self.num_processors)
+                    processor = np.random.choice(
+                        self.num_processors, 
+                        p=probabilities
+                    )
                     mapping.assign_task(processor, task_idx)
+                    
+            elif i == 2:
+                # ESTRATEGIA 3: ROUND-ROBIN DESDE MENOS CARGADO
+                sorted_procs = np.argsort(current_loads)
+                for task_idx in range(num_tasks):
+                    processor = sorted_procs[task_idx % self.num_processors]
+                    mapping.assign_task(processor, task_idx)
+                    
+            elif i == 3:
+                # ESTRATEGIA 4: BLOQUES BALANCEADOS
+                sorted_procs = np.argsort(current_loads)
+                tasks_per_proc = num_tasks // self.num_processors
+                remainder = num_tasks % self.num_processors
+                
+                task_idx = 0
+                for idx, proc_id in enumerate(sorted_procs):
+                    extra = 1 if idx < remainder else 0
+                    num_to_assign = tasks_per_proc + extra
+                    
+                    for _ in range(num_to_assign):
+                        if task_idx < num_tasks:
+                            mapping.assign_task(proc_id, task_idx)
+                            task_idx += 1
+            else:
+                # ESTRATEGIA 5+: MIXTO
+                for task_idx in range(num_tasks):
+                    if np.random.random() < 0.7:
+                        processor = np.random.choice(
+                            self.num_processors,
+                            p=probabilities
+                        )
+                    else:
+                        processor = np.random.randint(0, self.num_processors)
+                    mapping.assign_task(processor, task_idx)
+                    
             population.append(mapping)
+            
         return population
 
     def calculate_fitness(self, mapping: TaskMapping, tasks,
                         processor_states: List[ProcessorState]) -> float:
         """
-        Calcula el fitness de un mapeo de tareas/subtareas a procesadores
-        Versión CORREGIDA con normalización relativa
-        
-        Args:
-            mapping: Mapeo de tareas a procesadores
-            tasks: Lista de tareas o subtareas (cualquier objeto con atributo 'size')
-            processor_states: Estado actual de cada procesador
-            
-        Returns:
-            Valor de fitness en el rango [0, 1]
+        Calcula fitness enfocado en MAXIMIZAR UTILIZACIÓN UNIFORME
         """
         num_tasks = len(tasks)
         mapping.validate_and_fix(num_tasks)
 
-        # ====================================================================
-        # PASO 1: Calcular tiempos de finalización
-        # ====================================================================
-        completion_times = []
+        # Calcular cargas finales
+        final_loads = []
         
         for proc_id in range(self.num_processors):
-            current_load = processor_states[proc_id].current_load
-            task_indices = mapping.get_processor_tasks(proc_id)
-            
+            current_load = processor_states[proc_id].total_load()
+            new_task_indices = mapping.get_processor_tasks(proc_id)
             new_load = sum(
-                tasks[tid].size for tid in task_indices 
+                tasks[tid].size for tid in new_task_indices 
                 if 0 <= tid < num_tasks
             )
-            
-            completion_times.append(current_load + new_load)
+            final_loads.append(current_load + new_load)
 
-        # ====================================================================
-        # COMPONENTE 1: MAXSPAN (NORMALIZACIÓN RELATIVA)
-        # ====================================================================
-        maxspan = max(completion_times) if completion_times else 1.0
-        
-        # Calcular el MEJOR maxspan posible (distribución perfecta)
-        total_work = sum(tasks[i].size for i in range(num_tasks))
-        ideal_maxspan = total_work / self.num_processors
-        
-        # Normalizar: si maxspan = ideal → score = 1.0
-        #             si maxspan = 2*ideal → score = 0.5
-        if ideal_maxspan > 0:
-            maxspan_score = ideal_maxspan / maxspan
+        # Calcular métricas de utilización
+        max_load = max(final_loads) if final_loads else 1.0
+        min_load = min(final_loads) if final_loads else 0.0
+        avg_load = sum(final_loads) / self.num_processors if self.num_processors > 0 else 0.0
+        total_load = sum(final_loads)
+
+        # COMPONENTE 1: UTILIZACIÓN MÍNIMA (queremos que todos trabajen)
+        if max_load > 0:
+            min_utilization = min_load / max_load
         else:
-            maxspan_score = 0.0
-        
-        # Limitar a [0, 1]
-        maxspan_score = min(1.0, maxspan_score)
+            min_utilization = 0.0
 
-        # ====================================================================
-        # COMPONENTE 2: UTILIZACIÓN PROMEDIO
-        # ====================================================================
-        total_load = sum(completion_times)
-        avg_utilization = total_load / (maxspan * self.num_processors)
+        # COMPONENTE 2: EFICIENCIA GLOBAL (uso del sistema)
+        ideal_load_per_core = total_load / self.num_processors
+        if ideal_load_per_core > 0:
+            efficiency = avg_load / max_load  # Qué tan cerca está el promedio del máximo
+        else:
+            efficiency = 0.0
 
-        # ====================================================================
-        # COMPONENTE 3: POLÍTICA DE UMBRALES
-        # ====================================================================
-        avg_load = total_load / self.num_processors if self.num_processors > 0 else 1.0
-        heavy_threshold = self.H * avg_load
-        light_threshold = self.L * avg_load
-        
-        acceptable_queues = sum(
-            1 for ct in completion_times
-            if light_threshold <= ct <= heavy_threshold
+        # COMPONENTE 3: UNIFORMIDAD (coeficiente de variación inverso)
+        if avg_load > 0:
+            std_dev = (sum((load - avg_load) ** 2 for load in final_loads) / self.num_processors) ** 0.5
+            coef_variation = std_dev / avg_load
+            uniformity = 1.0 / (1.0 + coef_variation)  # Cercano a 1 si uniformes
+        else:
+            uniformity = 0.0
+
+        # COMPONENTE 4: THROUGHPUT POTENCIAL (inverso del makespan)
+        if max_load > 0:
+            throughput_score = avg_load / max_load
+        else:
+            throughput_score = 0.0
+
+        # FITNESS FINAL: Enfocado en utilización
+        fitness = (
+            0.35 * min_utilization +    # Que ningún core esté ocioso
+            0.25 * efficiency +          # Uso eficiente del sistema
+            0.30 * uniformity +          # Distribución uniforme
+            0.10 * throughput_score      # Maximizar throughput
         )
         
-        acceptable_ratio = acceptable_queues / self.num_processors if self.num_processors > 0 else 0
-
-        # ====================================================================
-        # FUNCIÓN DE FITNESS CORREGIDA
-        # ====================================================================
-        fitness = (0.4 * maxspan_score + 
-                0.3 * avg_utilization + 
-                0.3 * acceptable_ratio)
-        
-        # Bonificación si la mayoría está bien balanceada
-        if acceptable_ratio > 0.8:
+        # Bonificación si TODOS los cores están bien utilizados
+        cores_well_utilized = sum(1 for load in final_loads if load >= 0.8 * avg_load)
+        if cores_well_utilized >= 0.85 * self.num_processors:
             fitness *= 1.2
         
-        # Penalización si el desbalance es extremo
-        if acceptable_ratio < 0.4:
-            fitness *= 0.8
+        # Penalización severa si algún core está muy subutilizado
+        if min_utilization < 0.5:
+            fitness *= 0.7
 
-        return max(0.0, min(1.0, fitness))  # Forzar rango [0, 1]
+        return max(0.0, min(1.0, fitness))
 
     def roulette_wheel_selection(self, population: List[TaskMapping],
                                  fitness_values: List[float]) -> TaskMapping:
-        """
-        Selección por ruleta (Roulette Wheel Selection)
-        
-        Args:
-            population: Lista de cromosomas
-            fitness_values: Fitness de cada cromosoma
-            
-        Returns:
-            Cromosoma seleccionado
-        """
+        """Selección por ruleta"""
         total_fitness = sum(fitness_values)
 
         if total_fitness == 0:
@@ -472,25 +398,11 @@ class GeneticLoadBalancer:
 
     def cycle_crossover(self, parent1: TaskMapping,
                        parent2: TaskMapping, num_tasks: int) -> Tuple[TaskMapping, TaskMapping]:
-        """
-        Cruce por ciclo (Cycle Crossover) - VERSIÓN CORREGIDA
-        Asegura que cada tarea se asigne exactamente una vez
-        
-        Args:
-            parent1: Primer padre
-            parent2: Segundo padre
-            num_tasks: Número total de tareas
-            
-        Returns:
-            Tupla (hijo1, hijo2)
-        """
+        """Cruce por ciclo"""
         child1 = TaskMapping(self.num_processors)
         child2 = TaskMapping(self.num_processors)
 
-        # Para cada tarea, decidir qué padre seguir
-        # Esto asegura que cada tarea se asigne exactamente una vez
         for task_id in range(num_tasks):
-            # Encontrar en qué procesador está cada tarea en cada padre
             parent1_proc = None
             parent2_proc = None
             
@@ -500,7 +412,6 @@ class GeneticLoadBalancer:
                 if task_id in parent2.get_processor_tasks(proc_id):
                     parent2_proc = proc_id
             
-            # Si la tarea está en ambos padres, elegir aleatoriamente
             if parent1_proc is not None and parent2_proc is not None:
                 if np.random.random() < 0.5:
                     child1.assign_task(parent1_proc, task_id)
@@ -509,15 +420,12 @@ class GeneticLoadBalancer:
                     child1.assign_task(parent2_proc, task_id)
                     child2.assign_task(parent1_proc, task_id)
             elif parent1_proc is not None:
-                # Solo está en parent1
                 child1.assign_task(parent1_proc, task_id)
                 child2.assign_task(parent1_proc, task_id)
             elif parent2_proc is not None:
-                # Solo está en parent2
                 child1.assign_task(parent2_proc, task_id)
                 child2.assign_task(parent2_proc, task_id)
             else:
-                # No está en ninguno, asignar aleatoriamente
                 random_proc = np.random.randint(0, self.num_processors)
                 child1.assign_task(random_proc, task_id)
                 child2.assign_task(random_proc, task_id)
@@ -525,16 +433,7 @@ class GeneticLoadBalancer:
         return child1, child2
 
     def swap_mutation(self, mapping: TaskMapping, num_tasks: int) -> TaskMapping:
-        """
-        Mutación por intercambio (Swap Mutation)
-        
-        Args:
-            mapping: Cromosoma a mutar
-            num_tasks: Número total de tareas
-            
-        Returns:
-            Cromosoma mutado
-        """
+        """Mutación por intercambio"""
         mutated = mapping.copy()
 
         if np.random.random() > self.mutation_rate:
@@ -574,31 +473,16 @@ class GeneticLoadBalancer:
         return mutated
 
     def evolve(self, tasks,
-            processor_states: List[ProcessorState],
-            verbose: bool = False) -> TaskMapping:
-        """
-        Ciclo principal de evolución del Algoritmo Genético
-        
-        Args:
-            tasks: Lista de todas las tareas/subtareas a asignar (Task o Subtask)
-            processor_states: Estado actual de cada procesador
-            verbose: Si True, muestra progreso generación por generación
-            
-        Returns:
-            Mejor mapeo encontrado
-        
-        Nota: Este método funciona genéricamente con cualquier objeto que tenga
-        el atributo 'size', por lo que puede procesar tanto Task como Subtask.
-        """
+               processor_states: List[ProcessorState],
+               verbose: bool = False) -> TaskMapping:
+        """Ciclo principal de evolución del Algoritmo Genético"""
         num_tasks = len(tasks)
 
         if num_tasks == 0:
             return TaskMapping(self.num_processors)
 
-        # Inicializar población
-        population = self.initialize_population(num_tasks)
+        population = self.initialize_population(num_tasks, processor_states)
 
-        # Evaluar fitness inicial
         fitness_values = [
             self.calculate_fitness(mapping, tasks, processor_states)
             for mapping in population
@@ -606,46 +490,37 @@ class GeneticLoadBalancer:
 
         if verbose:
             print(f"\n🧬 Evolución del Algoritmo Genético:")
-            track_ga_evolution(population, fitness_values, 0)
+            track_ga_evolution(population, fitness_values, 0, tasks, processor_states)
 
-        # Ciclo de evolución
         for gen in range(self.num_generations):
             new_population = []
 
-            # Elitismo: mantener los 2 mejores
             sorted_indices = np.argsort(fitness_values)[::-1]
             new_population.append(population[sorted_indices[0]].copy())
             if len(population) > 1:
                 new_population.append(population[sorted_indices[1]].copy())
 
-            # Generar nueva población
             while len(new_population) < self.population_size:
-                # Selección
                 parent1 = self.roulette_wheel_selection(population, fitness_values)
                 parent2 = self.roulette_wheel_selection(population, fitness_values)
 
-                # Cruce
                 child1, child2 = self.cycle_crossover(parent1, parent2, num_tasks)
 
-                # Mutación
                 child1 = self.swap_mutation(child1, num_tasks)
                 child2 = self.swap_mutation(child2, num_tasks)
 
                 new_population.extend([child1, child2])
 
-            # Recortar al tamaño exacto
             population = new_population[:self.population_size]
 
-            # Re-evaluar fitness
             fitness_values = [
                 self.calculate_fitness(mapping, tasks, processor_states)
                 for mapping in population
             ]
             
             if verbose:
-                track_ga_evolution(population, fitness_values, gen + 1)
+                track_ga_evolution(population, fitness_values, gen + 1, tasks, processor_states)
 
-        # Retornar mejor solución
         best_idx = np.argmax(fitness_values)
         best_mapping = population[best_idx]
         best_mapping.fitness_value = fitness_values[best_idx]
@@ -654,143 +529,168 @@ class GeneticLoadBalancer:
 
         return best_mapping
 
+
 # ============================================================================
-# FUNCIONES DE VISUALIZACIÓN Y DEBUG
+# FUNCIONES DE VISUALIZACIÓN - ENFOCADAS EN UTILIZACIÓN
 # ============================================================================
 
-def print_distribution_stats(mapping: TaskMapping, tasks, 
-                            num_cores: int, show_details: bool = True):
+def print_utilization_stats(mapping: TaskMapping, tasks, 
+                           processor_states: List[ProcessorState],
+                           num_cores: int, show_details: bool = True):
     """
-    Muestra estadísticas detalladas de la distribución de tareas/subtareas
-    
-    Args:
-        mapping: Mapeo de tareas a procesadores
-        tasks: Lista de todas las tareas o subtareas (cualquier objeto con 'size')
-        num_cores: Número de cores
-        show_details: Si True, muestra detalle por core
+    Muestra estadísticas de UTILIZACIÓN de cores
     """
-    print("\n" + "="*70)
-    print("📊 ANÁLISIS DE DISTRIBUCIÓN DE CARGA")
-    print("="*70)
+    print("\n" + "="*80)
+    print("⚡ ANÁLISIS DE UTILIZACIÓN DE CORES")
+    print("="*80)
     
-    # Calcular cargas por core
-    loads = []
+    # Calcular cargas finales por core
+    final_loads = []
     task_counts = []
     
     for proc_id in range(num_cores):
+        current_load = processor_states[proc_id].total_load()
         task_ids = mapping.get_processor_tasks(proc_id)
-        total_load = sum(tasks[tid].size for tid in task_ids if tid < len(tasks))
-        loads.append(total_load)
+        new_load = sum(tasks[tid].size for tid in task_ids if tid < len(tasks))
+        final_loads.append(current_load + new_load)
         task_counts.append(len(task_ids))
     
-    # Estadísticas globales
-    min_load = min(loads) if loads else 0
-    max_load = max(loads) if loads else 0
-    avg_load = sum(loads) / num_cores if num_cores > 0 else 0
-    total_load = sum(loads)
+    # Métricas globales
+    max_load = max(final_loads) if final_loads else 1.0
+    min_load = min(final_loads) if final_loads else 0.0
+    avg_load = sum(final_loads) / num_cores if num_cores > 0 else 0.0
+    total_load = sum(final_loads)
     
-    # Calcular desbalance
-    if max_load > 0:
-        desbalance = (max_load - min_load) / max_load * 100
-    else:
-        desbalance = 0.0
+    # Calcular utilizaciones relativas
+    utilizations = [(load / max_load * 100) if max_load > 0 else 0.0 
+                    for load in final_loads]
     
-    # Calcular desviación estándar
-    variance = sum((load - avg_load) ** 2 for load in loads) / num_cores
-    std_dev = variance ** 0.5
-    coef_variation = (std_dev / avg_load * 100) if avg_load > 0 else 0
+    min_util = min(utilizations)
+    max_util = max(utilizations)
+    avg_util = sum(utilizations) / num_cores
     
-    # Mostrar resumen
-    print(f"\n📈 RESUMEN GENERAL:")
-    print(f"  Total de tareas:        {len(tasks)}")
-    print(f"  Número de cores:        {num_cores}")
+    # Calcular eficiencia del sistema
+    efficiency = (avg_load / max_load * 100) if max_load > 0 else 0.0
+    
+    # Calcular uniformidad
+    std_dev = (sum((u - avg_util) ** 2 for u in utilizations) / num_cores) ** 0.5
+    coef_variation = (std_dev / avg_util) if avg_util > 0 else 0.0
+    
+    # Contar cores por rango de utilización
+    idle_cores = sum(1 for u in utilizations if u < 50)
+    underutilized_cores = sum(1 for u in utilizations if 50 <= u < 80)
+    optimal_cores = sum(1 for u in utilizations if 80 <= u < 100)
+    saturated_cores = sum(1 for u in utilizations if u >= 100)
+    
+    print(f"\n📊 RESUMEN DE UTILIZACIÓN:")
+    print(f"  Cores disponibles:      {num_cores}")
+    print(f"  Tareas asignadas:       {len(tasks)}")
     print(f"  Carga total:            {total_load:,}")
-    print(f"  Carga promedio:         {avg_load:,.0f}")
-    print(f"  Carga mínima:           {min_load:,}")
-    print(f"  Carga máxima:           {max_load:,}")
     print(f"  Fitness:                {mapping.fitness_value:.4f}")
     
-    print(f"\n⚖️  MÉTRICAS DE BALANCE:")
-    print(f"  Desbalance:             {desbalance:.2f}%")
-    print(f"  Desviación estándar:    {std_dev:,.0f}")
-    print(f"  Coef. variación:        {coef_variation:.2f}%")
+    print(f"\n⚡ MÉTRICAS DE UTILIZACIÓN:")
+    print(f"  Utilización mínima:     {min_util:.1f}%")
+    print(f"  Utilización máxima:     {max_util:.1f}%")
+    print(f"  Utilización promedio:   {avg_util:.1f}%")
+    print(f"  Eficiencia del sistema: {efficiency:.1f}%")
+    print(f"  Coef. variación:        {coef_variation:.3f}")
     
-    # Clasificar balance
-    if desbalance < 5:
-        balance_status = "✅ EXCELENTE"
-    elif desbalance < 15:
-        balance_status = "🟢 BUENO"
-    elif desbalance < 30:
-        balance_status = "🟡 REGULAR"
+    print(f"\n🎯 DISTRIBUCIÓN DE CORES:")
+    print(f"  🔴 Ociosos (<50%):      {idle_cores:2d} cores ({idle_cores/num_cores*100:.1f}%)")
+    print(f"  🟡 Subutilizados (50-80%): {underutilized_cores:2d} cores ({underutilized_cores/num_cores*100:.1f}%)")
+    print(f"  🟢 Óptimos (80-100%):   {optimal_cores:2d} cores ({optimal_cores/num_cores*100:.1f}%)")
+    print(f"  🔥 Saturados (>100%):   {saturated_cores:2d} cores ({saturated_cores/num_cores*100:.1f}%)")
+    
+    # Clasificar rendimiento
+    if optimal_cores >= num_cores * 0.8:
+        status = "✅ EXCELENTE - Utilización óptima"
+    elif optimal_cores >= num_cores * 0.6:
+        status = "🟢 BUENO - Mayoría bien utilizada"
+    elif efficiency > 70:
+        status = "🟡 ACEPTABLE - Mejorable"
     else:
-        balance_status = "🔴 MALO"
+        status = "🔴 POBRE - Requiere optimización"
     
-    print(f"  Estado:                 {balance_status}")
+    print(f"\n💯 EVALUACIÓN:          {status}")
     
-    # Mostrar detalle por core si se solicita
+    # Mostrar detalle por core
     if show_details:
         print(f"\n📋 DETALLE POR CORE:")
-        print(f"  {'Core':<6} {'Tareas':<8} {'Carga':<12} {'% Carga':<10} {'Barra':<30}")
-        print(f"  {'-'*6} {'-'*8} {'-'*12} {'-'*10} {'-'*30}")
+        print(f"  {'Core':<6} {'Tareas':<8} {'Carga':<12} {'Utilización':<15} {'Barra Visual':<30}")
+        print(f"  {'-'*6} {'-'*8} {'-'*12} {'-'*15} {'-'*30}")
         
         for proc_id in range(num_cores):
-            load = loads[proc_id]
+            load = final_loads[proc_id]
             tasks_count = task_counts[proc_id]
-            load_pct = (load / avg_load * 100) if avg_load > 0 else 0
+            util = utilizations[proc_id]
             
-            # Crear barra visual
-            bar_length = int(load_pct / 100 * 20)
+            # Barra visual
+            bar_length = int(min(util, 100) / 5)  # 0-100% -> 0-20 chars
             bar = '█' * bar_length + '░' * (20 - bar_length)
             
-            # Colorear según desviación
-            if load < avg_load * 0.9:
-                color = "🔵"  # Subutilizado
-            elif load > avg_load * 1.1:
-                color = "🔴"  # Sobrecargado
+            # Clasificar por utilización
+            if util < 50:
+                color = "🔴"  # Ocioso
+            elif util < 80:
+                color = "🟡"  # Subutilizado
+            elif util <= 100:
+                color = "🟢"  # Óptimo
             else:
-                color = "🟢"  # Balanceado
+                color = "🔥"  # Saturado
             
             print(f"  {color} {proc_id:<4} {tasks_count:<8} {load:<12,} "
-                  f"{load_pct:>6.1f}%    {bar}")
+                  f"{util:>6.1f}%          {bar}")
         
-        # Mostrar task IDs si hay pocos cores
-        if num_cores <= 8:
+        # Mostrar distribución de tareas si hay pocos cores
+        if num_cores <= 8 and len(tasks) <= 100:
             print(f"\n🔍 TAREAS ASIGNADAS:")
             for proc_id in range(num_cores):
                 task_ids = mapping.get_processor_tasks(proc_id)
                 if task_ids:
-                    ids_str = ", ".join(str(tid) for tid in task_ids[:10])
-                    if len(task_ids) > 10:
-                        ids_str += f", ... (+{len(task_ids)-10} más)"
+                    ids_str = ", ".join(str(tid) for tid in task_ids[:15])
+                    if len(task_ids) > 15:
+                        ids_str += f", ... (+{len(task_ids)-15} más)"
                     print(f"  Core {proc_id:2d}: [{ids_str}]")
     
-    print("="*70 + "\n")
+    print("="*80 + "\n")
 
 
 def track_ga_evolution(population: List[TaskMapping], 
                       fitness_values: List[float],
-                      generation: int):
+                      generation: int,
+                      tasks,
+                      processor_states: List[ProcessorState]):
     """
-    Muestra el progreso del GA a través de las generaciones
-    
-    Args:
-        population: Población actual
-        fitness_values: Fitness de cada cromosoma
-        generation: Número de generación actual
+    Muestra el progreso del GA con métricas de utilización
     """
     best_fitness = max(fitness_values)
     avg_fitness = sum(fitness_values) / len(fitness_values)
     worst_fitness = min(fitness_values)
     
-    # Crear barra de progreso
-    progress = best_fitness
-    bar_length = int(progress * 20)
+    # Calcular utilización del mejor cromosoma
+    best_idx = np.argmax(fitness_values)
+    best_mapping = population[best_idx]
+    
+    final_loads = []
+    for proc_id in range(best_mapping.num_processors):
+        current_load = processor_states[proc_id].total_load()
+        task_ids = best_mapping.get_processor_tasks(proc_id)
+        new_load = sum(tasks[tid].size for tid in task_ids if tid < len(tasks))
+        final_loads.append(current_load + new_load)
+    
+    max_load = max(final_loads) if final_loads else 1.0
+    avg_load = sum(final_loads) / len(final_loads) if final_loads else 0.0
+    min_util = (min(final_loads) / max_load * 100) if max_load > 0 else 0.0
+    avg_util = (avg_load / max_load * 100) if max_load > 0 else 0.0
+    
+    # Barra de progreso
+    bar_length = int(best_fitness * 20)
     bar = '█' * bar_length + '░' * (20 - bar_length)
     
     print(f"  Gen {generation:2d}: "
-          f"Best={best_fitness:.4f} "
-          f"Avg={avg_fitness:.4f} "
-          f"Worst={worst_fitness:.4f} "
+          f"Fitness={best_fitness:.4f} "
+          f"AvgUtil={avg_util:.1f}% "
+          f"MinUtil={min_util:.1f}% "
           f"[{bar}]")
 
 
@@ -806,20 +706,7 @@ def vectorize_with_ga_load_balancing(
 ) -> Tuple[Any, float, Dict[str, Any]]:
     """
     Vectorización TF-IDF con balanceo de carga basado en GA
-    VERSIÓN CON SUBTAREAS Y EMPAREJAMIENTO EXPLÍCITO VECTOR-ETIQUETA
-    
-    Esta función subdivide cada tarea en subtareas de tamaño aleatorio
-    (4 * num_cores subtareas por tarea) para dar al GA más flexibilidad
-    en la distribución de carga y mejorar el balanceo.
-    
-    Args:
-        df: DataFrame con columna 'text' y opcionalmente 'class'
-        config: Configuración del GA
-        verbose: Si True, muestra información detallada
-        train_model: Si True, entrena un modelo MLP
-        
-    Returns:
-        Tupla (X, tiempo_total, estadisticas)
+    VERSIÓN ENFOCADA EN UTILIZACIÓN DE CORES
     """
     
     num_cores = config['num_cores']
@@ -841,7 +728,7 @@ def vectorize_with_ga_load_balancing(
     fit_time = time.time() - fit_start
     print(f"  Vocabulario listo ({fit_time:.2f}s)")
     
-    # Dividir dataset en tareas CON ÍNDICES ORIGINALES
+    # Dividir dataset en tareas
     chunk_size = calculate_optimal_chunk_size(total_texts, num_cores)
     print(f"  Chunk size óptimo: {chunk_size}")
     
@@ -861,10 +748,10 @@ def vectorize_with_ga_load_balancing(
     num_tasks_total = len(tasks)
     print(f"  Total de tareas: {num_tasks_total}")
     
-    # Subdividir tareas en subtareas para mejor balanceo
+    # Subdividir en subtareas
     num_subtasks_per_task = 4 * num_cores
     print(f"  Subtareas por tarea: {num_subtasks_per_task}")
-    print(f"\n  Creando subtareas con tamanos aleatorios...")
+    print(f"\n  Creando subtareas con tamaños aleatorios...")
     
     all_subtasks = []
     all_subtask_text_counts = []
@@ -873,25 +760,23 @@ def vectorize_with_ga_load_balancing(
         subtasks = create_subtasks_from_task(task, num_subtasks_per_task, task_id)
         all_subtasks.extend(subtasks)
         
-        # Registrar tamanos de las subtareas
         text_counts = [len(st.texts) for st in subtasks]
         all_subtask_text_counts.extend(text_counts)
         
-        # Mostrar info de la primera tarea como ejemplo
         if task_id == 0:
             print(f"\n  Tarea {task_id} (ejemplo):")
             print(f"    Textos en tarea: {len(task.texts)}")
             print(f"    Subtareas creadas: {len(subtasks)}")
-            print(f"    Tamanos (num de textos): min={min(text_counts)}, max={max(text_counts)}, avg={sum(text_counts)/len(text_counts):.1f}")
-            print(f"    Primeras 10 subtareas: {text_counts[:10]}")
+            print(f"    Tamaños (textos): min={min(text_counts)}, "
+                  f"max={max(text_counts)}, "
+                  f"avg={sum(text_counts)/len(text_counts):.1f}")
     
     num_subtasks_total = len(all_subtasks)
     print(f"\n  Total de subtareas: {num_subtasks_total}")
-    print(f"  Estadisticas de tamanos de subtareas:")
+    print(f"  Estadísticas de tamaños:")
     print(f"    Min textos: {min(all_subtask_text_counts)}")
     print(f"    Max textos: {max(all_subtask_text_counts)}")
     print(f"    Promedio: {sum(all_subtask_text_counts)/len(all_subtask_text_counts):.1f}")
-    print(f"    Mediana: {sorted(all_subtask_text_counts)[len(all_subtask_text_counts)//2]}")
     
     # Inicializar estados de procesador
     processor_states = [
@@ -919,41 +804,48 @@ def vectorize_with_ga_load_balancing(
     
     start_total = time.time()
     
-    # ========================================================================
-    # ⭐ CLAVE: Lista de tuplas (índice_original, vector)
-    # ========================================================================
-    indexed_vectors = []  # Lista de (idx, vector)
-    
+    indexed_vectors = []
     processed_subtasks = 0
     window_count = 0
     
-    # Procesar subtareas en ventanas
-    # Usamos un tamaño de ventana basado en el número de subtareas
-    window_size = num_subtasks_per_task * 2  # Procesar 2 tareas de subtareas a la vez
+    window_size = num_subtasks_per_task * 2
     
     while processed_subtasks < num_subtasks_total:
         window_start = processed_subtasks
         window_end = min(processed_subtasks + window_size, num_subtasks_total)
         window_subtasks = all_subtasks[window_start:window_end]
         
-        print(f"\n  Procesando ventana {window_count + 1} (subtareas {window_start}-{window_end})...")
+        print(f"\n  Procesando ventana {window_count + 1} "
+              f"(subtareas {window_start}-{window_end})...")
         
-        # Ejecutar GA con subtareas
+        # Mostrar estado actual de utilización
+        if verbose or window_count == 0:
+            current_loads = [ps.total_load() for ps in processor_states]
+            max_current = max(current_loads) if current_loads else 1.0
+            if max_current > 0:
+                utilizations = [load / max_current * 100 for load in current_loads]
+                print(f"  📊 Utilización actual: "
+                      f"min={min(utilizations):.1f}%, "
+                      f"max={max(utilizations):.1f}%, "
+                      f"avg={sum(utilizations)/len(utilizations):.1f}%")
+        
+        # Ejecutar GA
         ga_start = time.time()
         best_mapping = ga.evolve(window_subtasks, processor_states, verbose=verbose)
         ga_time = time.time() - ga_start
         stats['ga_time'] += ga_time
         
-        print(f"  (GA: {ga_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", end=" ")
+        print(f"  (GA: {ga_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", 
+              end=" ")
         
         if verbose:
             print()
-            print_distribution_stats(best_mapping, window_subtasks, num_cores, show_details=True)
+            print_utilization_stats(best_mapping, window_subtasks, 
+                                   processor_states, num_cores, show_details=True)
         
         # Ejecutar vectorización
         vec_start = time.time()
         
-        # Preparar trabajo para procesadores
         processor_work = [[] for _ in range(num_cores)]
         processor_indices = [[] for _ in range(num_cores)]
         
@@ -979,9 +871,8 @@ def vectorize_with_ga_load_balancing(
             with Pool(processes=num_cores) as pool:
                 chunk_results = pool.map(vectorize_chunk, work_args)
                 
-                # ⭐ Agregar todas las tuplas (idx, vector) a la lista
                 for result_list in chunk_results:
-                    if result_list:  # result_list es una lista de tuplas
+                    if result_list:
                         indexed_vectors.extend(result_list)
         
         vec_time = time.time() - vec_start
@@ -992,20 +883,33 @@ def vectorize_with_ga_load_balancing(
         else:
             print(f"\n  Vectorización completada en {vec_time:.2f}s")
         
-        # Limpiar estados
+        # Actualizar cargas (NO resetear)
         for proc_id in range(num_cores):
-            processor_states[proc_id].current_load = 0.0
-            processor_states[proc_id].queue.clear()
+            subtask_indices = best_mapping.get_processor_tasks(proc_id)
+            added_load = sum(
+                window_subtasks[sid].size 
+                for sid in subtask_indices 
+                if sid < len(window_subtasks)
+            )
+            processor_states[proc_id].current_load += added_load
+        
+        # Mostrar nuevas cargas
+        if verbose or window_count == 0:
+            new_loads = [ps.total_load() for ps in processor_states]
+            max_new = max(new_loads) if new_loads else 1.0
+            if max_new > 0:
+                new_utilizations = [load / max_new * 100 for load in new_loads]
+                print(f"  📈 Utilización actualizada: "
+                      f"min={min(new_utilizations):.1f}%, "
+                      f"max={max(new_utilizations):.1f}%, "
+                      f"avg={sum(new_utilizations)/len(new_utilizations):.1f}%")
         
         processed_subtasks = window_end
         window_count += 1
     
-    # ========================================================================
-    # ⭐ RECONSTRUIR X EN CUALQUIER ORDEN (no importa)
-    # ========================================================================
+    # Reconstruir matriz X
     print(f"  Reconstruyendo matriz...")
     
-    # Construir matriz X (en cualquier orden)
     vectors_list = [vec for _, vec in indexed_vectors]
     X = vstack(vectors_list)
     
@@ -1016,21 +920,19 @@ def vectorize_with_ga_load_balancing(
     
     print(f"\n  Resumen de tiempos:")
     print(f"  - Total: {total_time:.2f}s")
-    print(f"  - GA: {stats['ga_time']:.2f}s ({stats['ga_time']/total_time*100:.1f}%)")
-    print(f"  - Vectorización: {stats['vectorization_time']:.2f}s ({stats['vectorization_time']/total_time*100:.1f}%)")
+    print(f"  - GA: {stats['ga_time']:.2f}s "
+          f"({stats['ga_time']/total_time*100:.1f}%)")
+    print(f"  - Vectorización: {stats['vectorization_time']:.2f}s "
+          f"({stats['vectorization_time']/total_time*100:.1f}%)")
     
-    # ========================================================================
-    # ⭐ EMPAREJAMIENTO EXPLÍCITO: Crear y alineado con etiquetas
-    # ========================================================================
+    # Emparejamiento con etiquetas
     if train_model and 'class' in df.columns:
         print(f"\n{'='*70}")
         print(f"🔗 EMPAREJAMIENTO VECTOR-ETIQUETA")
         print(f"{'='*70}")
         
-        # Extraer etiquetas originales
         y_original = df['class'].values
         
-        # ⭐ Crear nuevo array de etiquetas alineado con los vectores
         y_aligned = np.zeros(len(indexed_vectors), dtype=y_original.dtype)
         
         for i, (original_idx, _) in enumerate(indexed_vectors):
@@ -1040,51 +942,44 @@ def vectorize_with_ga_load_balancing(
         print(f"  - Forma de X: {X.shape}")
         print(f"  - Forma de y: {y_aligned.shape}")
         if X.shape is not None and y_aligned.shape is not None:
-            print(f"  - Coinciden?: {'SI' if X.shape[0] == y_aligned.shape[0] else 'NO'}")
+            print(f"  - Coinciden?: "
+                  f"{'SI' if X.shape[0] == y_aligned.shape[0] else 'NO'}")
         
-        # Verificar distribución de clases
         unique, counts = np.unique(y_aligned, return_counts=True)
         print(f"\n  📊 Distribución de clases:")
         for label, count in zip(unique, counts):
-            print(f"     Clase {label}: {count} ({count/len(y_aligned)*100:.1f}%)")
+            print(f"     Clase {label}: {count} "
+                  f"({count/len(y_aligned)*100:.1f}%)")
         
-        # Verificar algunas muestras
         print(f"\n  🔍 Verificando primeras 5 muestras:")
         for i in range(min(5, len(indexed_vectors))):
             original_idx, _ = indexed_vectors[i]
-            text_preview = texts[original_idx][:50] + "..." if len(texts[original_idx]) > 50 else texts[original_idx]
-            print(f"     Vector[{i}] -> Original[{original_idx}] -> Clase={y_aligned[i]}")
+            text_preview = (texts[original_idx][:50] + "..." 
+                          if len(texts[original_idx]) > 50 
+                          else texts[original_idx])
+            print(f"     Vector[{i}] -> Original[{original_idx}] "
+                  f"-> Clase={y_aligned[i]}")
             print(f"         Texto: {text_preview}")
         
         print(f"{'='*70}\n")
         
-        # Entrenar modelo con vectores y etiquetas ALINEADOS
-        mlp_stats = train_and_evaluate_mlp(X, y_aligned, method_name="GA-Paralelo")
+        mlp_stats = train_and_evaluate_mlp(X, y_aligned, 
+                                          method_name="GA-Paralelo")
         stats['mlp_stats'] = mlp_stats
     
     return X, total_time, stats
+
 
 # ============================================================================
 # ENTRENAMIENTO Y EVALUACIÓN DE MODELO
 # ============================================================================
 
 def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]:
-    """
-    Entrena un MLPClassifier y muestra matriz de confusión
-    
-    Args:
-        X: Matriz de características (vectores TF-IDF)
-        y: Etiquetas
-        method_name: Nombre del método para el título
-    
-    Returns:
-        Diccionario con métricas del modelo
-    """
+    """Entrena un MLPClassifier y muestra matriz de confusión"""
     print(f"\n{'='*70}")
     print(f"🧠 ENTRENAMIENTO DE RED NEURONAL MLP ({method_name})")
     print(f"{'='*70}")
     
-    # Dividir datos
     print("  Dividiendo datos (80% train, 20% test)...")
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
@@ -1093,13 +988,12 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     print(f"  Train: {X_train.shape[0]} muestras")
     print(f"  Test:  {X_test.shape[0]} muestras")
     
-    # Crear y entrenar modelo
     print("\n  Entrenando MLP...")
     mlp_start = time.time()
     
     mlp = MLPClassifier(
-        hidden_layer_sizes=(100, 50),  # 2 capas ocultas
-        max_iter=50,                   # Pocas iteraciones para ser rápido
+        hidden_layer_sizes=(100, 50),
+        max_iter=50,
         random_state=42,
         verbose=False
     )
@@ -1109,23 +1003,19 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     
     print(f"  ✓ Entrenamiento completado en {mlp_time:.2f}s")
     
-    # Predecir
     print("\n  Realizando predicciones...")
     y_pred = mlp.predict(X_test)
     
-    # Calcular métricas
     accuracy = accuracy_score(y_test, y_pred)
     
     print(f"\n📊 RESULTADOS:")
     print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
     
-    # Matriz de confusión
     cm = confusion_matrix(y_test, y_pred)
     
     print(f"\n  Matriz de Confusión:")
     print(f"  {cm}")
     
-    # Visualizar matriz de confusión
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                 xticklabels=['No Suicida', 'Suicida'],
@@ -1135,14 +1025,12 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     plt.xlabel('Predicho')
     plt.tight_layout()
     
-    # Guardar figura
     filename = f'confusion_matrix_{method_name.lower().replace(" ", "_")}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  ✓ Matriz de confusión guardada: {filename}")
     
-    # Reporte detallado
     print(f"\n  Reporte de Clasificación:")
     report = classification_report(y_test, y_pred, 
                                    target_names=['No Suicida', 'Suicida'])
@@ -1150,7 +1038,6 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     
     print(f"{'='*70}\n")
     
-    # Retornar métricas
     return {
         'accuracy': accuracy,
         'confusion_matrix': cm.tolist(),
@@ -1165,14 +1052,49 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
 # ============================================================================
 
 if __name__ == "__main__":
-    """Pruebas del módulo GA"""
-    print("Prueba de GA Load Balancer")
+    """Pruebas del módulo GA con enfoque en utilización"""
+    print("="*70)
+    print("🧬 GA LOAD BALANCER - ENFOQUE EN UTILIZACIÓN DE CORES")
+    print("="*70)
     print(f"Cores disponibles: {AVAILABLE_CORES}")
     
-    # Cargar datos de prueba
+    print("\n📂 Cargando datos...")
     df_test = pd.read_csv('Suicide_Detection.csv').head(20000)
+    print(f"   Dataset: {len(df_test)} textos")
     
-    # Ejecutar vectorización con GA
-    X, tiempo, stats = vectorize_with_ga_load_balancing(df_test)
+    if 'class' in df_test.columns:
+        class_dist = df_test['class'].value_counts()
+        print(f"\n📊 Distribución de clases:")
+        for label, count in class_dist.items():
+            print(f"   Clase {label}: {count} ({count/len(df_test)*100:.1f}%)")
     
-    print(f"\nResultado: {X.shape[0]} textos vectorizados en {tiempo:.2f}s")
+    print("\n" + "="*70)
+    print("🚀 INICIANDO VECTORIZACIÓN CON GA")
+    print("="*70)
+    
+    X, tiempo, stats = vectorize_with_ga_load_balancing(
+        df_test,
+        config=GA_CONFIG,
+        verbose=True,
+        train_model=True
+    )
+    
+    print("\n" + "="*70)
+    print("✅ RESULTADO FINAL")
+    print("="*70)
+    print(f"  Textos procesados:      {X.shape[0]:,}")
+    print(f"  Dimensiones del vector: {X.shape[1]:,}")
+    print(f"  Tiempo total:           {tiempo:.2f}s")
+    print(f"  Tiempo GA:              {stats['ga_time']:.2f}s")
+    print(f"  Tiempo vectorización:   {stats['vectorization_time']:.2f}s")
+    print(f"  Cores utilizados:       {stats['num_cores']}")
+    print(f"  Tareas creadas:         {stats['num_tasks']}")
+    print(f"  Subtareas creadas:      {stats['num_subtasks']}")
+    
+    if 'mlp_stats' in stats:
+        print(f"\n🧠 RESULTADOS DEL MODELO:")
+        print(f"  Accuracy:               {stats['mlp_stats']['accuracy']:.4f}")
+        print(f"  Tiempo entrenamiento:   "
+              f"{stats['mlp_stats']['train_time']:.2f}s")
+    
+    print("="*70)
