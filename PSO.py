@@ -550,7 +550,7 @@ def vectorize_with_pso_load_balancing(
     
     # Inicializar vectorizador
     vectorizer = TfidfVectorizer(
-        tokenizer=procesar_texto,
+        tokenizer=None,
         lowercase=False,
         max_features=1000
     )

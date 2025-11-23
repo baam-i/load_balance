@@ -201,67 +201,14 @@ def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[
     # Retornar lista de tuplas (índice_original, vector)
     result = []
     for i, original_idx in enumerate(original_indices):
-        # result.append((original_idx, X_chunk[i, :]))
         result.append((original_idx, X_chunk.getrow(i)))
     
     return result
 
 
 def calculate_optimal_chunk_size(total_texts: int, num_cores: int) -> int:
-    """
-    Calcula chunk_size para tener SUFICIENTES tareas que justifiquen el GA
-    
-    REGLA DE ORO: Apuntar a 3-5 tareas por core
-    - Menos de 3: El GA no tiene suficiente espacio de búsqueda
-    - Más de 5: El overhead del GA crece sin mucho beneficio adicional
-    """
-    
-    # Apuntar a 4 tareas por core (punto dulce)
-    ideal_tasks_per_core = 4
-    target_total_tasks = num_cores * ideal_tasks_per_core
-    
-    # Calcular chunk_size basado en objetivo
-    chunk_size = total_texts // target_total_tasks
-    
-    # Aplicar límites basados en tamaño del dataset
-    if total_texts < 10000:
-        # Pequeño: mínimo 200, máximo 1000
-        chunk_size = max(200, min(1000, chunk_size))
-    elif total_texts < 50000:
-        # Mediano: mínimo 500, máximo 2000
-        chunk_size = max(500, min(2000, chunk_size))
-    else:
-        # Grande: mínimo 1000, máximo 5000
-        chunk_size = max(1000, min(5000, chunk_size))
-    
+    chunk_size = total_texts // 10
     return chunk_size
-
-
-def calculate_optimal_window_size(total_tasks: int, num_cores: int) -> int:
-    """
-    VERSIÓN CORREGIDA: Ventanas más grandes para justificar el GA
-    
-    FILOSOFÍA:
-    - Ventana pequeña (< 2*cores): No justifica GA
-    - Ventana óptima (3-5*cores): Balance overhead/beneficio
-    - Ventana grande (> 10*cores): GA tarda mucho
-    """
-    return total_tasks
-    '''
-    # Si hay pocas tareas, procesarlas todas en 1 ventana
-    if total_tasks <= num_cores * 5:
-        return total_tasks
-    
-    # Si hay bastantes tareas, hacer 3 ventanas grandes
-    elif total_tasks <= num_cores * 10:
-        return (total_tasks + 1) // 3
-    
-    # Si hay muchas tareas, dividir en ventanas de ~5*cores
-    else:
-        window_size = num_cores * 5
-        return min(window_size, total_tasks)
-    '''
-
 
 # ============================================================================
 # ALGORITMO GENÉTICO
@@ -300,7 +247,6 @@ class GeneticLoadBalancer:
 
         for i in range(self.population_size):
             mapping = TaskMapping(self.num_processors)
-
             if i == 0:
                 # Estrategia 1: Round-robin puro
                 for task_idx in range(num_tasks):
@@ -321,9 +267,7 @@ class GeneticLoadBalancer:
                 for task_idx in range(num_tasks):
                     processor = np.random.randint(0, self.num_processors)
                     mapping.assign_task(processor, task_idx)
-
             population.append(mapping)
-
         return population
 
     def calculate_fitness(self, mapping: TaskMapping, tasks: List[Task],
@@ -397,12 +341,12 @@ class GeneticLoadBalancer:
                 0.3 * acceptable_ratio)
         
         # Bonificación si la mayoría está bien balanceada
-        if acceptable_ratio > 0.7:
-            fitness *= 1.1
+        if acceptable_ratio > 0.8:
+            fitness *= 1.2
         
         # Penalización si el desbalance es extremo
-        if acceptable_ratio < 0.3:
-            fitness *= 0.9
+        if acceptable_ratio < 0.4:
+            fitness *= 0.8
 
         return max(0.0, min(1.0, fitness))  # Forzar rango [0, 1]
 
@@ -771,7 +715,7 @@ def vectorize_with_ga_load_balancing(
     
     # Inicializar vectorizador TF-IDF
     vectorizer = TfidfVectorizer(
-        tokenizer=process_text,
+        tokenizer=None,
         lowercase=False,
         max_features=1000
     )
@@ -802,10 +746,6 @@ def vectorize_with_ga_load_balancing(
     num_tasks_total = len(tasks)
     print(f"  Total de tareas: {num_tasks_total}")
     
-    # Calcular tamaño de ventana
-    window_size = calculate_optimal_window_size(num_tasks_total, num_cores)
-    print(f"  Tamaño de ventana óptimo: {window_size}")
-    
     # Inicializar estados de procesador
     processor_states = [
         ProcessorState(processor_id=i, current_load=0.0, queue=[])
@@ -823,7 +763,6 @@ def vectorize_with_ga_load_balancing(
         'ga_generations': config['num_generations'],
         'ga_population': config['population_size'],
         'chunk_size': chunk_size,
-        'window_size': window_size,
         'ga_time': 0.0,
         'vectorization_time': 0.0,
         'total_time': 0.0
@@ -837,20 +776,15 @@ def vectorize_with_ga_load_balancing(
     indexed_vectors = []  # Lista de (idx, vector)
     
     processed_tasks = 0
-    window_count = 0
-    
-    total_windows = (num_tasks_total + window_size - 1) // window_size
-    print(f"  Procesando {total_windows} ventanas...")
+    chunk_count = 0
     
     while processed_tasks < num_tasks_total:
-        window_count += 1
+        window_beginning = chunk_count * chunk_size
+        chunk_count += 1
+        window_end = min((chunk_count * chunk_size) - 1, num_tasks_total)
+        window_tasks = tasks[window_beginning:window_end]
         
-        window_end = min(processed_tasks + window_size, num_tasks_total)
-        window_tasks = tasks[processed_tasks:window_end]
-        
-        print(f"    Ventana {window_count}/{total_windows}: {len(window_tasks)} tareas", end=" ")
-        
-        # Ejecutar GA
+        # Ejecutar GA        
         ga_start = time.time()
         best_mapping = ga.evolve(window_tasks, processor_states, verbose=verbose)
         ga_time = time.time() - ga_start
@@ -1096,7 +1030,7 @@ if __name__ == "__main__":
     print(f"Cores disponibles: {AVAILABLE_CORES}")
     
     # Cargar datos de prueba
-    df_test = pd.read_csv('Suicide_Detection.csv').head(10000)
+    df_test = pd.read_csv('Suicide_Detection.csv').head(20000)
     
     # Ejecutar vectorización con GA
     X, tiempo, stats = vectorize_with_ga_load_balancing(df_test)

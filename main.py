@@ -376,8 +376,14 @@ if __name__ == '__main__':
     DATA_FILE = 'Suicide_Detection.csv'
     SIZES = list(range(20_000, 200_001, 20_000))
     
+    # Configuraciones de test
     GA_TEST_CONFIG = GA_CONFIG
     PSO_TEST_CONFIG = PSO_CONFIG
+    # Por implementar
+    WOA_TEST_CONFIG = None
+    AG_TEST_CONFIG_2 = None
+    LOCAL_SEARCH_TEST_CONFIG = None
+    LOCAL_SEARCH_TEST_CONFIG_2 = None
     
     # Verificar requisitos
     print("=" * 80)
@@ -403,13 +409,6 @@ if __name__ == '__main__':
     print(f"\n¿Deseas ver la evolución detallada? (y/n): ", end='')
     verbose_response = input().strip().lower()
     VERBOSE_MODE = (verbose_response == 'y')
-    
-    print(f"\n¿Deseas continuar con la comparación? (y/n): ", end='')
-    response = input().strip().lower()
-    
-    if response != 'y':
-        print("Comparación cancelada.")
-        sys.exit(0)
     
     try:
         results_df = compare_pipelines(
