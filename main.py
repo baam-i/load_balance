@@ -26,6 +26,7 @@ from PSO import vectorize_with_pso_load_balancing, PSO_CONFIG
 from GA import vectorize_with_ga_load_balancing, GA_CONFIG
 from WOA import vectorize_with_woa_load_balancing, WOA_CONFIG
 from HILL_CLIMBING import vectorize_with_hill_climbing, HILL_CLIMBING_CONFIG
+from SA import vectorize_with_simulated_annealing, SIMULATED_ANNEALING_CONFIG
 
 # ============================================================================
 # FUNCIÓN PRINCIPAL DE COMPARACIÓN
@@ -44,11 +45,12 @@ def compare_pipelines(
     woa_config: Dict[str, Any] = WOA_CONFIG,
     # local search
     hill_climbing_config: Dict[str, Any] = HILL_CLIMBING_CONFIG,
+    simulated_annealing_config: Dict[str, Any] = SIMULATED_ANNEALING_CONFIG,
     verbose: bool = False,
     train_models: bool = False
 ) -> pd.DataFrame:
     """
-    Ejecuta experimentos comparativos entre los tres enfoques
+    Ejecuta experimentos comparativos entre los todos los enfoques
     
     Args:
         csv_path: Ruta al CSV
@@ -56,11 +58,9 @@ def compare_pipelines(
         output_csv: Archivo CSV de salida
         output_png: Gráfica de tiempos
         output_speedup_png: Gráfica de speedup
-        ga_config: Configuración GA
-        pso_config: Configuración PSO
 
         verbose: Si True, muestra evolución detallada
-    
+        train_models: Si True, entrena un MLP al final de la vectorizacion
     Returns:
         DataFrame con resultados
     """
@@ -77,6 +77,7 @@ def compare_pipelines(
     print("  3. PSO-Paralelo (Particle Swarm Optimization)")
     print("  4. WOA-Paralelo (Whale Optimization Algorithm)")
     print("  5. Hill Climbing-Paralelo")
+    print("  6. Simulated Annealing-Paralelo")
 
     
     if verbose:
@@ -127,15 +128,18 @@ def compare_pipelines(
             'pso_time': np.nan,
             'woa_time': np.nan,
             'hill_climbing_time': np.nan,
+            'simulated_annealing_time': np.nan,
             'ga_speedup': np.nan,
             'pso_speedup': np.nan,
             'woa_speedup': np.nan,
             'hill_climbing_speedup': np.nan,
+            'simulated_annealing_speedup': np.nan,
             'seq_accuracy': np.nan,
             'ga_accuracy': np.nan,
             'pso_accuracy': np.nan,
             'woa_accuracy': np.nan,
-            'hill_climbing_accuracy': np.nan
+            'hill_climbing_accuracy': np.nan,
+            'simulated_annealing_accuracy': np.nan
         }
         
         # ====================================================================
@@ -279,6 +283,33 @@ def compare_pipelines(
             continue
         
         # ====================================================================
+        # EXPERIMENTO 6: Simulated Annealing-PARALELO
+        # ====================================================================
+        print("\n" + "-" * 80)
+        print("[Simulated Annealing] Iniciando...")
+        print("-" * 80)
+        
+        try:
+            train_now = train_models and (size == sizes[-1])
+            
+            _, simulated_annealing_total_time, simulated_annealing_stats = vectorize_with_simulated_annealing(
+                df_subset,
+                config=simulated_annealing_config,
+                verbose=verbose,
+                train_model=train_now
+            )
+            experiment_result['simulated_annealing_time'] = simulated_annealing_total_time
+            if train_now and 'mlp_stats' in simulated_annealing_stats:
+                experiment_result['simulated_annealing_accuracy'] = simulated_annealing_stats['mlp_stats']['accuracy']
+                
+            print(f"✓ [SIMULATED ANNEALING-PARALELO] Completado en {simulated_annealing_total_time:.2f}s")
+        except Exception as e:
+            print(f"✗ [SIMULATED ANNEALING-PARALELO] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+        
+        # ====================================================================
         # CALCULAR MÉTRICAS
         # ====================================================================
         print("\n" + "-" * 80)
@@ -290,6 +321,7 @@ def compare_pipelines(
         pso_time = experiment_result['pso_time']
         woa_time = experiment_result['woa_time']
         hill_climbing_time = experiment_result['hill_climbing_time']
+        simulated_annealing_time = experiment_result['simulated_annealing_time']
         
         if not np.isnan(ga_time) and not np.isnan(seq_time) and seq_time > 0:
             ga_speedup = seq_time / ga_time
@@ -312,12 +344,12 @@ def compare_pipelines(
         else:
             print("  WOA Speedup: N/A")
             
-        if not np.isnan(hill_climbing_time) and not np.isnan(seq_time) and seq_time > 0:
-            hill_climbing_speedup = seq_time /  hill_climbing_time
-            experiment_result['hill_climbing_speedup'] =  hill_climbing_speedup
-            print(f"  HILL CLIMBING Speedup: { hill_climbing_speedup:.2f}x")
+        if not np.isnan(simulated_annealing_time) and not np.isnan(seq_time) and seq_time > 0:
+            simulated_annealing_speedup = seq_time /  simulated_annealing_time
+            experiment_result['simulated_annealing_speedup'] =  simulated_annealing_speedup
+            print(f"  SIMULATED ANNEALING Speedup: { simulated_annealing_speedup:.2f}x")
         else:
-            print("  HILL CLIMBING Speedup: N/A")
+            print("  SIMULATED ANNEALING Speedup: N/A")
             
         results.append(experiment_result)
         
@@ -329,7 +361,7 @@ def compare_pipelines(
         print(f"  GA-Paralelo: {ga_time:.2f}s (speedup: {experiment_result['ga_speedup']:.2f}x)")
         print(f"  PSO-Paralelo: {pso_time:.2f}s (speedup: {experiment_result['pso_speedup']:.2f}x)")
         print(f"  WOA-Paralelo: {woa_time:.2f}s (speedup: {experiment_result['woa_speedup']:.2f}x)")
-        print(f"  HILL CLIMBING-Paralelo: {hill_climbing_time:.2f}s (speedup: {experiment_result['hill_climbing_speedup']:.2f}x)")
+        print(f"  SIMULATED ANNEALING-Paralelo: {simulated_annealing_time:.2f}s (speedup: {experiment_result['simulated_annealing_speedup']:.2f}x)")
     
     # ========================================================================
     # GENERAR DATAFRAME
@@ -340,8 +372,8 @@ def compare_pipelines(
     
     df_results = pd.DataFrame(results)
     
-    column_order = ['size', 'seq_time', 'ga_time', 'pso_time','woa_time','hill_climbing_time',
-                   'ga_speedup', 'pso_speedup','woa_speedup','hill_climbing_speedup']
+    column_order = ['size', 'seq_time', 'ga_time', 'pso_time','woa_time','hill_climbing_time','simulated_annealing_time',
+                   'ga_speedup', 'pso_speedup','woa_speedup','hill_climbing_speedup','simulated_annealing_speedup']
     column_order = [col for col in column_order if col in df_results.columns]
     df_results = df_results[column_order]
     
@@ -382,12 +414,16 @@ def compare_pipelines(
             label='PSO-Paralelo', color='#2ecc71')
     
     plt.plot(df_results['size'], df_results['woa_time'],
-            marker='x', linewidth=2, markersize=8,
+            marker='X', linewidth=2, markersize=8,
             label='WOA-Paralelo', color="#fc4eab")
     
     plt.plot(df_results['size'], df_results['hill_climbing_time'],
             marker='*', linewidth=2, markersize=8,
-            label='WOA-Paralelo', color="#75ffed")
+            label='HILL CLIMBING-Paralelo', color="#75ffed")
+    
+    plt.plot(df_results['size'], df_results['simulated_annealing_time'],
+            marker='D', linewidth=2, markersize=8,
+            label='SIMULATED ANNEALING-Paralelo', color="#3f1fc0")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Tiempo de Ejecución (segundos)', fontsize=12)
@@ -434,6 +470,10 @@ def compare_pipelines(
     plt.plot(df_results['size'], df_results['hill_climbing_speedup'],
             marker='*', linewidth=2, markersize=8,
             label='Hill Climbing-Paralelo', color='#75ffed')
+    
+    plt.plot(df_results['size'], df_results['simulated_annealing_time'],
+            marker='D', linewidth=2, markersize=8,
+            label='SIMULATED ANNEALING-Paralelo', color="#3f1fc0")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Speedup (veces más rápido que secuencial)', fontsize=12)
@@ -514,6 +554,7 @@ if __name__ == '__main__':
             pso_config=PSO_CONFIG,
             woa_config=WOA_CONFIG,
             hill_climbing_config=HILL_CLIMBING_CONFIG,
+            simulated_annealing_config=SIMULATED_ANNEALING_CONFIG,
             verbose=VERBOSE_MODE,
             train_models=TRAIN_MODELS
         )
