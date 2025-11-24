@@ -2,12 +2,8 @@
 GA.py
 
 Balanceo de Carga Dinámico Basado en Algoritmos Genéticos para Vectorización de Texto
+VERSIÓN ADAPTATIVA basada en "An Adaptive Genetic Algorithm" (Kee et al.)
 ================================================================================
-
-Basado en: "Observations on Using Genetic Algorithms for Dynamic Load-Balancing"
-por Zomaya & Teh (2001)
-
-VERSIÓN MEJORADA: Enfoque en UTILIZACIÓN de cores en lugar de balance de carga
 """
 
 import numpy as np
@@ -15,7 +11,7 @@ import pandas as pd
 import time
 import re
 from multiprocessing import Pool, cpu_count
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from dataclasses import dataclass
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import vstack
@@ -34,13 +30,17 @@ STOP_WORDS = {"the", "and", "is", "in", "at", "of", "a", "to", "for", "on",
 
 AVAILABLE_CORES = cpu_count()
 
-GA_CONFIG = {
+GA_CONFIG_ADAPTIVE = {
     'population_size': 20,
     'num_generations': 5,
     'heavy_multiplier': 1.2,
     'light_multiplier': 0.8,
     'mutation_rate': 0.15,
-    'num_cores': AVAILABLE_CORES
+    'num_cores': AVAILABLE_CORES,
+    # Parámetros adaptativos
+    'adaptive': True,
+    'training_epochs': 100,
+    'training_generations_per_epoch': 1
 }
 
 # ============================================================================
@@ -75,6 +75,59 @@ class ProcessorState:
     def total_load(self) -> float:
         """Calcula la carga total del procesador"""
         return self.current_load + sum(t.size for t in self.queue)
+
+
+@dataclass
+class PopulationState:
+    """Estado de la población para el AG adaptativo"""
+    delta_fm: float  # Tasa de cambio del mejor fitness
+    sigma_f: float   # Varianza de fitness
+    sigma_p: float   # Varianza de población (diversidad)
+    
+    def quantize(self) -> Tuple[str, str, str]:
+        """Cuantifica el estado en niveles (high/medium/low)"""
+        # Rangos basados en observaciones empíricas
+        def quantize_value(value: float, low_thresh: float, high_thresh: float) -> str:
+            if value < low_thresh:
+                return 'low'
+            elif value < high_thresh:
+                return 'medium'
+            else:
+                return 'high'
+        
+        # ΔFm: cambio en fitness (0.0 a ~0.1+)
+        delta_level = quantize_value(self.delta_fm, 0.01, 0.05)
+        
+        # σf: varianza de fitness (0.0 a ~0.3+)
+        sigma_f_level = quantize_value(self.sigma_f, 0.05, 0.15)
+        
+        # σp: diversidad (0.0 a 1.0)
+        sigma_p_level = quantize_value(self.sigma_p, 0.3, 0.6)
+        
+        return (delta_level, sigma_f_level, sigma_p_level)
+
+
+@dataclass
+class ControlVector:
+    """Vector de control de parámetros del AG"""
+    crossover_prob: float
+    mutation_prob: float
+    scaling_factor: float
+    
+    def copy(self) -> 'ControlVector':
+        return ControlVector(
+            self.crossover_prob,
+            self.mutation_prob,
+            self.scaling_factor
+        )
+    
+    def randomize(self, base_vector: 'ControlVector', variation: float = 0.2) -> 'ControlVector':
+        """Genera variación aleatoria del vector"""
+        return ControlVector(
+            np.clip(base_vector.crossover_prob + np.random.uniform(-variation, variation), 0.05, 0.99),
+            np.clip(base_vector.mutation_prob + np.random.uniform(-variation, variation), 0.001, 0.5),
+            np.clip(base_vector.scaling_factor + np.random.uniform(-variation*2, variation*2), 0.5, 3.0)
+        )
 
 
 class TaskMapping:
@@ -203,13 +256,45 @@ def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> Li
 
 
 # ============================================================================
-# ALGORITMO GENÉTICO - ENFOCADO EN UTILIZACIÓN
+# ALGORITMO GENÉTICO ADAPTATIVO
 # ============================================================================
+
+class AdaptiveStateTable:
+    """Tabla de estados para mapear vectores de estado a vectores de control"""
+    
+    def __init__(self):
+        self.table: Dict[Tuple[str, str, str], ControlVector] = {}
+        self._initialize_table()
+    
+    def _initialize_table(self):
+        """Inicializa la tabla con valores por defecto (Grefenstette)"""
+        levels = ['low', 'medium', 'high']
+        default_control = ControlVector(
+            crossover_prob=0.95,
+            mutation_prob=0.01,
+            scaling_factor=1.0
+        )
+        
+        for delta in levels:
+            for sigma_f in levels:
+                for sigma_p in levels:
+                    self.table[(delta, sigma_f, sigma_p)] = default_control.copy()
+    
+    def get_control_vector(self, state: PopulationState) -> ControlVector:
+        """Obtiene el vector de control para un estado dado"""
+        quantized = state.quantize()
+        return self.table[quantized].copy()
+    
+    def update_control_vector(self, state: PopulationState, control: ControlVector):
+        """Actualiza el vector de control para un estado"""
+        quantized = state.quantize()
+        self.table[quantized] = control.copy()
+
 
 class GeneticLoadBalancer:
     """
-    Algoritmo Genético para Balanceo de Carga Dinámico
-    VERSIÓN MEJORADA: Maximiza utilización uniforme de cores
+    Algoritmo Genético Adaptativo para Balanceo de Carga Dinámico
+    Basado en "An Adaptive Genetic Algorithm" (Kee, Airey, Cyre)
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -220,13 +305,205 @@ class GeneticLoadBalancer:
         self.num_generations = self.config['num_generations']
         self.H = self.config['heavy_multiplier']
         self.L = self.config['light_multiplier']
-        self.mutation_rate = self.config['mutation_rate']
+        
+        # Parámetros adaptativos
+        self.adaptive = self.config.get('adaptive', False)
+        self.training_epochs = self.config.get('training_epochs', 100)
+        self.training_gens_per_epoch = self.config.get('training_generations_per_epoch', 1)
+        
+        # Estado adaptativo
+        self.state_table = AdaptiveStateTable() if self.adaptive else None
+        self.is_trained = False
+        self.fitness_history: List[float] = []
+        self.best_fitness_history: List[float] = []
+        
+        # Parámetros actuales (pueden ser adaptativos)
+        self.current_control = ControlVector(
+            crossover_prob=0.95,
+            mutation_prob=self.config.get('mutation_rate', 0.15),
+            scaling_factor=1.0
+        )
+
+    def calculate_population_state(self, population: List[TaskMapping],
+                                   fitness_values: List[float]) -> PopulationState:
+        """Calcula el vector de estado de la población"""
+        
+        # ΔFm: Tasa de cambio del mejor fitness
+        if len(self.best_fitness_history) >= 2:
+            recent_best = self.best_fitness_history[-5:] if len(self.best_fitness_history) >= 5 else self.best_fitness_history
+            if len(recent_best) > 1:
+                delta_fm = (recent_best[-1] - recent_best[0]) / len(recent_best)
+            else:
+                delta_fm = 0.0
+        else:
+            delta_fm = 0.0
+        
+        # σf²: Varianza de fitness
+        if len(fitness_values) > 1:
+            sigma_f = np.std(fitness_values)
+        else:
+            sigma_f = 0.0
+        
+        # σp²: Diversidad de población (basada en diferencias en asignaciones)
+        if len(population) > 1:
+            # Calcular diversidad como promedio de diferencias entre individuos
+            diversities = []
+            for i in range(min(10, len(population))):  # Muestrear para eficiencia
+                for j in range(i+1, min(10, len(population))):
+                    diversity = self._calculate_hamming_diversity(
+                        population[i], population[j]
+                    )
+                    diversities.append(diversity)
+            sigma_p = np.mean(diversities) if diversities else 0.5
+        else:
+            sigma_p = 0.5
+        
+        return PopulationState(
+            delta_fm=max(0.0, delta_fm),
+            sigma_f=sigma_f,
+            sigma_p=sigma_p
+        )
+    
+    def _calculate_hamming_diversity(self, mapping1: TaskMapping, 
+                                    mapping2: TaskMapping) -> float:
+        """Calcula diversidad tipo Hamming entre dos mapeos"""
+        total_tasks = sum(len(tasks) for tasks in mapping1.assignment)
+        if total_tasks == 0:
+            return 0.0
+        
+        differences = 0
+        for proc_id in range(self.num_processors):
+            tasks1 = set(mapping1.get_processor_tasks(proc_id))
+            tasks2 = set(mapping2.get_processor_tasks(proc_id))
+            differences += len(tasks1.symmetric_difference(tasks2))
+        
+        return differences / (2 * total_tasks)  # Normalizar
+
+    def train_adaptive_table(self, num_tasks: int,
+                           processor_states: List[ProcessorState],
+                           verbose: bool = False):
+        """Fase de entrenamiento del AG adaptativo (Table-based)"""
+        if not self.adaptive or self.is_trained:
+            return
+        
+        if verbose:
+            print(f"\n{'='*70}")
+            print(f"🎓 FASE DE ENTRENAMIENTO ADAPTATIVO")
+            print(f"{'='*70}")
+            print(f"  Épocas: {self.training_epochs}")
+            print(f"  Generaciones por época: {self.training_gens_per_epoch}")
+        
+        # Crear tareas sintéticas para entrenamiento
+        synthetic_tasks = [
+            Task(texts=[], size=np.random.randint(100, 1000), original_indices=[])
+            for _ in range(num_tasks)
+        ]
+        
+        training_start = time.time()
+        
+        for epoch in range(self.training_epochs):
+            # Crear población inicial
+            population_C = self.initialize_population(len(synthetic_tasks), processor_states)
+            population_T = [m.copy() for m in population_C]
+            
+            # Calcular estado de población
+            fitness_C = [
+                self.calculate_fitness(m, synthetic_tasks, processor_states)
+                for m in population_C
+            ]
+            
+            state = self.calculate_population_state(population_C, fitness_C)
+            
+            # Obtener vector de control actual de la tabla
+            control_C = self.state_table.get_control_vector(state)
+            
+            # Generar variación para población de prueba
+            control_T = control_C.randomize(control_C)
+            
+            # mismo fitness para la poblacion Temporal que la constante antes de la variacion
+            fitness_T = fitness_C
+            
+            # Evolucionar ambas poblaciones
+            for gen in range(self.training_gens_per_epoch):
+                # Población C con control de tabla
+                self.current_control = control_C
+                population_C, fitness_C = self._evolve_one_generation(
+                    population_C, fitness_C, synthetic_tasks, processor_states
+                )
+                
+                # Población T con control variado
+                self.current_control = control_T
+                population_T, fitness_T = self._evolve_one_generation(
+                    population_T, fitness_T, synthetic_tasks, processor_states
+                )
+            
+            # Comparar resultados
+            avg_fitness_C = np.mean(fitness_C)
+            avg_fitness_T = np.mean(fitness_T)
+            
+            # Actualizar tabla si T es mejor
+            if avg_fitness_T > avg_fitness_C:
+                self.state_table.update_control_vector(state, control_T)
+                if verbose and epoch % 20 == 0:
+                    improvement = ((avg_fitness_T - avg_fitness_C) / avg_fitness_C * 100)
+                    print(f"  Época {epoch:3d}: Mejora {improvement:+.2f}% "
+                          f"(Pc={control_T.crossover_prob:.3f}, "
+                          f"Pm={control_T.mutation_prob:.3f}, "
+                          f"α={control_T.scaling_factor:.2f})")
+        
+        training_time = time.time() - training_start
+        self.is_trained = True
+        
+        if verbose:
+            print(f"\n  ✓ Entrenamiento completado en {training_time:.2f}s")
+            print(f"{'='*70}\n")
+
+    def _evolve_one_generation(self, population: List[TaskMapping],
+                              fitness_values: List[float],
+                              tasks, processor_states: List[ProcessorState]
+                              ) -> Tuple[List[TaskMapping], List[float]]:
+        """Evoluciona la población una generación"""
+        num_tasks = len(tasks)
+        new_population = []
+        
+        # Elitismo
+        sorted_indices = np.argsort(fitness_values)[::-1]
+        new_population.append(population[sorted_indices[0]].copy())
+        if len(population) > 1:
+            new_population.append(population[sorted_indices[1]].copy())
+        
+        # Generar nueva población
+        while len(new_population) < self.population_size:
+            parent1 = self.roulette_wheel_selection(population, fitness_values)
+            parent2 = self.roulette_wheel_selection(population, fitness_values)
+            
+            # Usar probabilidad de crossover adaptativa
+            if np.random.random() < self.current_control.crossover_prob:
+                child1, child2 = self.cycle_crossover(parent1, parent2, num_tasks)
+            else:
+                child1, child2 = parent1.copy(), parent2.copy()
+            
+            # Usar probabilidad de mutación adaptativa
+            child1 = self.swap_mutation(child1, num_tasks, 
+                                       self.current_control.mutation_prob)
+            child2 = self.swap_mutation(child2, num_tasks,
+                                       self.current_control.mutation_prob)
+            
+            new_population.extend([child1, child2])
+        
+        population = new_population[:self.population_size]
+        
+        # Recalcular fitness
+        fitness_values = [
+            self.calculate_fitness(mapping, tasks, processor_states)
+            for mapping in population
+        ]
+        
+        return population, fitness_values
 
     def initialize_population(self, num_tasks: int, 
                              processor_states: List[ProcessorState]) -> List[TaskMapping]:
-        """
-        Inicializa población con estrategias conscientes de utilización
-        """
+        """Inicializa población con estrategias diversas"""
         population = []
         
         current_loads = [ps.total_load() for ps in processor_states]
@@ -247,7 +524,7 @@ class GeneticLoadBalancer:
             mapping = TaskMapping(self.num_processors)
             
             if i == 0:
-                # ESTRATEGIA 1: GREEDY - Asignar siempre al menos cargado
+                # Greedy
                 for task_idx in range(num_tasks):
                     loads_in_mapping = [
                         current_loads[p] + len(mapping.get_processor_tasks(p))
@@ -257,44 +534,23 @@ class GeneticLoadBalancer:
                     mapping.assign_task(least_loaded, task_idx)
                     
             elif i == 1:
-                # ESTRATEGIA 2: WEIGHTED RANDOM - Probabilidad inversa a carga
+                # Weighted random
                 for task_idx in range(num_tasks):
-                    processor = np.random.choice(
-                        self.num_processors, 
-                        p=probabilities
-                    )
+                    processor = np.random.choice(self.num_processors, p=probabilities)
                     mapping.assign_task(processor, task_idx)
                     
             elif i == 2:
-                # ESTRATEGIA 3: ROUND-ROBIN DESDE MENOS CARGADO
+                # Round-robin
                 sorted_procs = np.argsort(current_loads)
                 for task_idx in range(num_tasks):
                     processor = sorted_procs[task_idx % self.num_processors]
                     mapping.assign_task(processor, task_idx)
                     
-            elif i == 3:
-                # ESTRATEGIA 4: BLOQUES BALANCEADOS
-                sorted_procs = np.argsort(current_loads)
-                tasks_per_proc = num_tasks // self.num_processors
-                remainder = num_tasks % self.num_processors
-                
-                task_idx = 0
-                for idx, proc_id in enumerate(sorted_procs):
-                    extra = 1 if idx < remainder else 0
-                    num_to_assign = tasks_per_proc + extra
-                    
-                    for _ in range(num_to_assign):
-                        if task_idx < num_tasks:
-                            mapping.assign_task(proc_id, task_idx)
-                            task_idx += 1
             else:
-                # ESTRATEGIA 5+: MIXTO
+                # Random mixto
                 for task_idx in range(num_tasks):
                     if np.random.random() < 0.7:
-                        processor = np.random.choice(
-                            self.num_processors,
-                            p=probabilities
-                        )
+                        processor = np.random.choice(self.num_processors, p=probabilities)
                     else:
                         processor = np.random.randint(0, self.num_processors)
                     mapping.assign_task(processor, task_idx)
@@ -305,13 +561,10 @@ class GeneticLoadBalancer:
 
     def calculate_fitness(self, mapping: TaskMapping, tasks,
                         processor_states: List[ProcessorState]) -> float:
-        """
-        Calcula fitness enfocado en MAXIMIZAR UTILIZACIÓN UNIFORME
-        """
+        """Calcula fitness con power scaling adaptativo"""
         num_tasks = len(tasks)
         mapping.validate_and_fix(num_tasks)
 
-        # Calcular cargas finales
         final_loads = []
         
         for proc_id in range(self.num_processors):
@@ -323,53 +576,49 @@ class GeneticLoadBalancer:
             )
             final_loads.append(current_load + new_load)
 
-        # Calcular métricas de utilización
         max_load = max(final_loads) if final_loads else 1.0
         min_load = min(final_loads) if final_loads else 0.0
         avg_load = sum(final_loads) / self.num_processors if self.num_processors > 0 else 0.0
         total_load = sum(final_loads)
 
-        # COMPONENTE 1: UTILIZACIÓN MÍNIMA (queremos que todos trabajen)
+        # Métricas de utilización
         if max_load > 0:
             min_utilization = min_load / max_load
+            efficiency = avg_load / max_load
         else:
             min_utilization = 0.0
-
-        # COMPONENTE 2: EFICIENCIA GLOBAL (uso del sistema)
-        ideal_load_per_core = total_load / self.num_processors
-        if ideal_load_per_core > 0:
-            efficiency = avg_load / max_load  # Qué tan cerca está el promedio del máximo
-        else:
             efficiency = 0.0
 
-        # COMPONENTE 3: UNIFORMIDAD (coeficiente de variación inverso)
         if avg_load > 0:
             std_dev = (sum((load - avg_load) ** 2 for load in final_loads) / self.num_processors) ** 0.5
             coef_variation = std_dev / avg_load
-            uniformity = 1.0 / (1.0 + coef_variation)  # Cercano a 1 si uniformes
+            uniformity = 1.0 / (1.0 + coef_variation)
         else:
             uniformity = 0.0
 
-        # COMPONENTE 4: THROUGHPUT POTENCIAL (inverso del makespan)
         if max_load > 0:
             throughput_score = avg_load / max_load
         else:
             throughput_score = 0.0
 
-        # FITNESS FINAL: Enfocado en utilización
+        # Fitness base
         fitness = (
-            0.35 * min_utilization +    # Que ningún core esté ocioso
-            0.25 * efficiency +          # Uso eficiente del sistema
-            0.30 * uniformity +          # Distribución uniforme
-            0.10 * throughput_score      # Maximizar throughput
+            0.35 * min_utilization +
+            0.25 * efficiency +
+            0.30 * uniformity +
+            0.10 * throughput_score
         )
         
-        # Bonificación si TODOS los cores están bien utilizados
+        # Aplicar power scaling si es adaptativo
+        if self.adaptive and self.current_control.scaling_factor != 1.0:
+            alpha = self.current_control.scaling_factor
+            fitness = fitness ** alpha
+        
+        # Bonificaciones y penalizaciones
         cores_well_utilized = sum(1 for load in final_loads if load >= 0.8 * avg_load)
         if cores_well_utilized >= 0.85 * self.num_processors:
             fitness *= 1.2
         
-        # Penalización severa si algún core está muy subutilizado
         if min_utilization < 0.5:
             fitness *= 0.7
 
@@ -431,11 +680,15 @@ class GeneticLoadBalancer:
 
         return child1, child2
 
-    def swap_mutation(self, mapping: TaskMapping, num_tasks: int) -> TaskMapping:
-        """Mutación por intercambio"""
+    def swap_mutation(self, mapping: TaskMapping, num_tasks: int,
+                     mutation_rate: Optional[float] = None) -> TaskMapping:
+        """Mutación por intercambio con tasa adaptativa"""
         mutated = mapping.copy()
+        
+        if mutation_rate is None:
+            mutation_rate = self.current_control.mutation_prob
 
-        if np.random.random() > self.mutation_rate:
+        if np.random.random() > mutation_rate:
             return mutated
 
         mutated.validate_and_fix(num_tasks)
@@ -474,11 +727,15 @@ class GeneticLoadBalancer:
     def evolve(self, tasks,
                processor_states: List[ProcessorState],
                verbose: bool = False) -> TaskMapping:
-        """Ciclo principal de evolución del Algoritmo Genético"""
+        """Ciclo principal de evolución con adaptación"""
         num_tasks = len(tasks)
 
         if num_tasks == 0:
             return TaskMapping(self.num_processors)
+
+        # Fase de entrenamiento si es adaptativo y no está entrenado
+        if self.adaptive and not self.is_trained:
+            self.train_adaptive_table(num_tasks, processor_states, verbose)
 
         population = self.initialize_population(num_tasks, processor_states)
 
@@ -486,12 +743,25 @@ class GeneticLoadBalancer:
             self.calculate_fitness(mapping, tasks, processor_states)
             for mapping in population
         ]
+        
+        self.best_fitness_history.append(max(fitness_values))
 
         if verbose:
-            print(f"\n🧬 Evolución del Algoritmo Genético:")
-            track_ga_evolution(population, fitness_values, 0, tasks, processor_states)
+            print(f"\n🧬 Evolución del Algoritmo Genético {'ADAPTATIVO' if self.adaptive else 'ESTÁTICO'}:")
+            if self.adaptive:
+                state = self.calculate_population_state(population, fitness_values)
+                control = self.state_table.get_control_vector(state)
+                print(f"  Estado inicial: ΔFm={state.delta_fm:.4f}, "
+                      f"σf={state.sigma_f:.4f}, σp={state.sigma_p:.4f}")
+                print(f"  Control inicial: Pc={control.crossover_prob:.3f}, "
+                      f"Pm={control.mutation_prob:.3f}, α={control.scaling_factor:.2f}")
 
         for gen in range(self.num_generations):
+            # Actualizar parámetros adaptativamente si corresponde
+            if self.adaptive and self.is_trained:
+                state = self.calculate_population_state(population, fitness_values)
+                self.current_control = self.state_table.get_control_vector(state)
+            
             new_population = []
 
             sorted_indices = np.argsort(fitness_values)[::-1]
@@ -503,7 +773,10 @@ class GeneticLoadBalancer:
                 parent1 = self.roulette_wheel_selection(population, fitness_values)
                 parent2 = self.roulette_wheel_selection(population, fitness_values)
 
-                child1, child2 = self.cycle_crossover(parent1, parent2, num_tasks)
+                if np.random.random() < self.current_control.crossover_prob:
+                    child1, child2 = self.cycle_crossover(parent1, parent2, num_tasks)
+                else:
+                    child1, child2 = parent1.copy(), parent2.copy()
 
                 child1 = self.swap_mutation(child1, num_tasks)
                 child2 = self.swap_mutation(child2, num_tasks)
@@ -517,8 +790,18 @@ class GeneticLoadBalancer:
                 for mapping in population
             ]
             
-            if verbose:
-                track_ga_evolution(population, fitness_values, gen + 1, tasks, processor_states)
+            self.best_fitness_history.append(max(fitness_values))
+            
+            if verbose and gen % 5 == 0:
+                if self.adaptive:
+                    state = self.calculate_population_state(population, fitness_values)
+                    q_state = state.quantize()
+                    print(f"  Gen {gen:2d}: fitness={max(fitness_values):.4f}, "
+                          f"estado={q_state}, "
+                          f"Pc={self.current_control.crossover_prob:.2f}, "
+                          f"Pm={self.current_control.mutation_prob:.3f}")
+                else:
+                    print(f"  Gen {gen:2d}: fitness={max(fitness_values):.4f}")
 
         best_idx = np.argmax(fitness_values)
         best_mapping = population[best_idx]
@@ -530,20 +813,17 @@ class GeneticLoadBalancer:
 
 
 # ============================================================================
-# FUNCIONES DE VISUALIZACIÓN - ENFOCADAS EN UTILIZACIÓN
+# FUNCIONES DE VISUALIZACIÓN
 # ============================================================================
 
 def print_utilization_stats(mapping: TaskMapping, tasks, 
                            processor_states: List[ProcessorState],
                            num_cores: int, show_details: bool = True):
-    """
-    Muestra estadísticas de UTILIZACIÓN de cores
-    """
+    """Muestra estadísticas de UTILIZACIÓN de cores"""
     print("\n" + "="*80)
     print("⚡ ANÁLISIS DE UTILIZACIÓN DE CORES")
     print("="*80)
     
-    # Calcular cargas finales por core
     final_loads = []
     task_counts = []
     
@@ -554,13 +834,11 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
         final_loads.append(current_load + new_load)
         task_counts.append(len(task_ids))
     
-    # Métricas globales
     max_load = max(final_loads) if final_loads else 1.0
     min_load = min(final_loads) if final_loads else 0.0
     avg_load = sum(final_loads) / num_cores if num_cores > 0 else 0.0
     total_load = sum(final_loads)
     
-    # Calcular utilizaciones relativas
     utilizations = [(load / max_load * 100) if max_load > 0 else 0.0 
                     for load in final_loads]
     
@@ -568,14 +846,11 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     max_util = max(utilizations)
     avg_util = sum(utilizations) / num_cores
     
-    # Calcular eficiencia del sistema
     efficiency = (avg_load / max_load * 100) if max_load > 0 else 0.0
     
-    # Calcular uniformidad
     std_dev = (sum((u - avg_util) ** 2 for u in utilizations) / num_cores) ** 0.5
     coef_variation = (std_dev / avg_util) if avg_util > 0 else 0.0
     
-    # Contar cores por rango de utilización
     idle_cores = sum(1 for u in utilizations if u < 50)
     underutilized_cores = sum(1 for u in utilizations if 50 <= u < 80)
     optimal_cores = sum(1 for u in utilizations if 80 <= u < 100)
@@ -600,7 +875,6 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     print(f"  🟢 Óptimos (80-100%):   {optimal_cores:2d} cores ({optimal_cores/num_cores*100:.1f}%)")
     print(f"  🔥 Saturados (>100%):   {saturated_cores:2d} cores ({saturated_cores/num_cores*100:.1f}%)")
     
-    # Clasificar rendimiento
     if optimal_cores >= num_cores * 0.8:
         status = "✅ EXCELENTE - Utilización óptima"
     elif optimal_cores >= num_cores * 0.6:
@@ -612,7 +886,6 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     
     print(f"\n💯 EVALUACIÓN:          {status}")
     
-    # Mostrar detalle por core
     if show_details:
         print(f"\n📋 DETALLE POR CORE:")
         print(f"  {'Core':<6} {'Tareas':<8} {'Carga':<12} {'Utilización':<15} {'Barra Visual':<30}")
@@ -623,98 +896,45 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
             tasks_count = task_counts[proc_id]
             util = utilizations[proc_id]
             
-            # Barra visual
-            bar_length = int(min(util, 100) / 5)  # 0-100% -> 0-20 chars
+            bar_length = int(min(util, 100) / 5)
             bar = '█' * bar_length + '░' * (20 - bar_length)
             
-            # Clasificar por utilización
             if util < 50:
-                color = "🔴"  # Ocioso
+                color = "🔴"
             elif util < 80:
-                color = "🟡"  # Subutilizado
+                color = "🟡"
             elif util <= 100:
-                color = "🟢"  # Óptimo
+                color = "🟢"
             else:
-                color = "🔥"  # Saturado
+                color = "🔥"
             
             print(f"  {color} {proc_id:<4} {tasks_count:<8} {load:<12,} "
                   f"{util:>6.1f}%          {bar}")
-        
-        # Mostrar distribución de tareas si hay pocos cores
-        if num_cores <= 8 and len(tasks) <= 100:
-            print(f"\n🔍 TAREAS ASIGNADAS:")
-            for proc_id in range(num_cores):
-                task_ids = mapping.get_processor_tasks(proc_id)
-                if task_ids:
-                    ids_str = ", ".join(str(tid) for tid in task_ids[:15])
-                    if len(task_ids) > 15:
-                        ids_str += f", ... (+{len(task_ids)-15} más)"
-                    print(f"  Core {proc_id:2d}: [{ids_str}]")
     
     print("="*80 + "\n")
-
-
-def track_ga_evolution(population: List[TaskMapping], 
-                      fitness_values: List[float],
-                      generation: int,
-                      tasks,
-                      processor_states: List[ProcessorState]):
-    """
-    Muestra el progreso del GA con métricas de utilización
-    """
-    best_fitness = max(fitness_values)
-    avg_fitness = sum(fitness_values) / len(fitness_values)
-    worst_fitness = min(fitness_values)
-    
-    # Calcular utilización del mejor cromosoma
-    best_idx = np.argmax(fitness_values)
-    best_mapping = population[best_idx]
-    
-    final_loads = []
-    for proc_id in range(best_mapping.num_processors):
-        current_load = processor_states[proc_id].total_load()
-        task_ids = best_mapping.get_processor_tasks(proc_id)
-        new_load = sum(tasks[tid].size for tid in task_ids if tid < len(tasks))
-        final_loads.append(current_load + new_load)
-    
-    max_load = max(final_loads) if final_loads else 1.0
-    avg_load = sum(final_loads) / len(final_loads) if final_loads else 0.0
-    min_util = (min(final_loads) / max_load * 100) if max_load > 0 else 0.0
-    avg_util = (avg_load / max_load * 100) if max_load > 0 else 0.0
-    
-    # Barra de progreso
-    bar_length = int(best_fitness * 20)
-    bar = '█' * bar_length + '░' * (20 - bar_length)
-    
-    print(f"  Gen {generation:2d}: "
-          f"Fitness={best_fitness:.4f} "
-          f"AvgUtil={avg_util:.1f}% "
-          f"MinUtil={min_util:.1f}% "
-          f"[{bar}]")
 
 
 # ============================================================================
 # FUNCIÓN PRINCIPAL DE VECTORIZACIÓN
 # ============================================================================
 
-def vectorize_with_ga_load_balancing(
+def vectorize_with_ga_adaptive_load_balancing(
     df,
-    config: Dict[str, Any] = GA_CONFIG,
+    config: Dict[str, Any] = GA_CONFIG_ADAPTIVE,
     verbose: bool = False,
     train_model: bool = False
 ) -> Tuple[Any, float, Dict[str, Any]]:
     """
-    Vectorización TF-IDF con balanceo de carga basado en GA
-    VERSIÓN ENFOCADA EN UTILIZACIÓN DE CORES
+    Vectorización TF-IDF con balanceo de carga basado en GA Adaptativo
     """
     
     num_cores = config['num_cores']
     texts = df["text"].tolist()
     total_texts = len(texts)
     
-    print(f"  Usando {num_cores} cores para procesamiento paralelo")
+    adaptive_str = "ADAPTATIVO" if config.get('adaptive', False) else "ESTÁTICO"
+    print(f"  Usando {num_cores} cores con AG {adaptive_str}")
     
-    # Inicializar vectorizador TF-IDF
     vectorizer = TfidfVectorizer(
         tokenizer=None,
         lowercase=False,
@@ -727,7 +947,6 @@ def vectorize_with_ga_load_balancing(
     fit_time = time.time() - fit_start
     print(f"  Vocabulario listo ({fit_time:.2f}s)")
     
-    # Dividir dataset en tareas
     chunk_size = calculate_optimal_chunk_size(total_texts, num_cores)
     print(f"  Chunk size óptimo: {chunk_size}")
     
@@ -747,7 +966,6 @@ def vectorize_with_ga_load_balancing(
     num_tasks_total = len(tasks)
     print(f"  Total de tareas: {num_tasks_total}")
     
-    # Subdividir en subtareas
     num_subtasks_per_task = 4 * num_cores
     print(f"  Subtareas por tarea: {num_subtasks_per_task}")
     print(f"\n  Creando subtareas con tamaños aleatorios...")
@@ -772,26 +990,20 @@ def vectorize_with_ga_load_balancing(
     
     num_subtasks_total = len(all_subtasks)
     print(f"\n  Total de subtareas: {num_subtasks_total}")
-    print(f"  Estadísticas de tamaños:")
-    print(f"    Min textos: {min(all_subtask_text_counts)}")
-    print(f"    Max textos: {max(all_subtask_text_counts)}")
-    print(f"    Promedio: {sum(all_subtask_text_counts)/len(all_subtask_text_counts):.1f}")
     
-    # Inicializar estados de procesador
     processor_states = [
         ProcessorState(processor_id=i, current_load=0.0, queue=[])
         for i in range(num_cores)
     ]
     
-    # Inicializar GA
     ga = GeneticLoadBalancer(config)
     
-    # Estadísticas
     stats: Dict[str, Any] = {
         'total_texts': total_texts,
         'num_tasks': num_tasks_total,
         'num_subtasks': num_subtasks_total,
         'num_cores': num_cores,
+        'adaptive': config.get('adaptive', False),
         'ga_generations': config['num_generations'],
         'ga_population': config['population_size'],
         'chunk_size': chunk_size,
@@ -817,18 +1029,6 @@ def vectorize_with_ga_load_balancing(
         print(f"\n  Procesando ventana {window_count + 1} "
               f"(subtareas {window_start}-{window_end})...")
         
-        # Mostrar estado actual de utilización
-        if verbose or window_count == 0:
-            current_loads = [ps.total_load() for ps in processor_states]
-            max_current = max(current_loads) if current_loads else 1.0
-            if max_current > 0:
-                utilizations = [load / max_current * 100 for load in current_loads]
-                print(f"  📊 Utilización actual: "
-                      f"min={min(utilizations):.1f}%, "
-                      f"max={max(utilizations):.1f}%, "
-                      f"avg={sum(utilizations)/len(utilizations):.1f}%")
-        
-        # Ejecutar GA
         ga_start = time.time()
         best_mapping = ga.evolve(window_subtasks, processor_states, verbose=verbose)
         ga_time = time.time() - ga_start
@@ -842,7 +1042,6 @@ def vectorize_with_ga_load_balancing(
             print_utilization_stats(best_mapping, window_subtasks, 
                                    processor_states, num_cores, show_details=True)
         
-        # Ejecutar vectorización
         vec_start = time.time()
         
         processor_work = [[] for _ in range(num_cores)]
@@ -879,10 +1078,7 @@ def vectorize_with_ga_load_balancing(
         
         if not verbose:
             print(f"(Vec: {vec_time:.2f}s)")
-        else:
-            print(f"\n  Vectorización completada en {vec_time:.2f}s")
         
-        # Actualizar cargas (NO resetear)
         for proc_id in range(num_cores):
             subtask_indices = best_mapping.get_processor_tasks(proc_id)
             added_load = sum(
@@ -892,21 +1088,9 @@ def vectorize_with_ga_load_balancing(
             )
             processor_states[proc_id].current_load += added_load
         
-        # Mostrar nuevas cargas
-        if verbose or window_count == 0:
-            new_loads = [ps.total_load() for ps in processor_states]
-            max_new = max(new_loads) if new_loads else 1.0
-            if max_new > 0:
-                new_utilizations = [load / max_new * 100 for load in new_loads]
-                print(f"  📈 Utilización actualizada: "
-                      f"min={min(new_utilizations):.1f}%, "
-                      f"max={max(new_utilizations):.1f}%, "
-                      f"avg={sum(new_utilizations)/len(new_utilizations):.1f}%")
-        
         processed_subtasks = window_end
         window_count += 1
     
-    # Reconstruir matriz X
     print(f"  Reconstruyendo matriz...")
     
     vectors_list = [vec for _, vec in indexed_vectors]
@@ -924,46 +1108,21 @@ def vectorize_with_ga_load_balancing(
     print(f"  - Vectorización: {stats['vectorization_time']:.2f}s "
           f"({stats['vectorization_time']/total_time*100:.1f}%)")
     
-    # Emparejamiento con etiquetas
     if train_model and 'class' in df.columns:
         print(f"\n{'='*70}")
         print(f"🔗 EMPAREJAMIENTO VECTOR-ETIQUETA")
         print(f"{'='*70}")
         
         y_original = df['class'].values
-        
         y_aligned = np.zeros(len(indexed_vectors), dtype=y_original.dtype)
         
         for i, (original_idx, _) in enumerate(indexed_vectors):
             y_aligned[i] = y_original[original_idx]
         
         print(f"  OK: Etiquetas emparejadas: {len(y_aligned)}")
-        print(f"  - Forma de X: {X.shape}")
-        print(f"  - Forma de y: {y_aligned.shape}")
-        if X.shape is not None and y_aligned.shape is not None:
-            print(f"  - Coinciden?: "
-                  f"{'SI' if X.shape[0] == y_aligned.shape[0] else 'NO'}")
-        
-        unique, counts = np.unique(y_aligned, return_counts=True)
-        print(f"\n  📊 Distribución de clases:")
-        for label, count in zip(unique, counts):
-            print(f"     Clase {label}: {count} "
-                  f"({count/len(y_aligned)*100:.1f}%)")
-        
-        print(f"\n  🔍 Verificando primeras 5 muestras:")
-        for i in range(min(5, len(indexed_vectors))):
-            original_idx, _ = indexed_vectors[i]
-            text_preview = (texts[original_idx][:50] + "..." 
-                          if len(texts[original_idx]) > 50 
-                          else texts[original_idx])
-            print(f"     Vector[{i}] -> Original[{original_idx}] "
-                  f"-> Clase={y_aligned[i]}")
-            print(f"         Texto: {text_preview}")
-        
-        print(f"{'='*70}\n")
         
         mlp_stats = train_and_evaluate_mlp(X, y_aligned, 
-                                          method_name="GA-Paralelo")
+                                          method_name=f"GA-{'Adaptativo' if stats['adaptive'] else 'Estatico'}")
         stats['mlp_stats'] = mlp_stats
     
     return X, total_time, stats
@@ -1024,7 +1183,7 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     plt.xlabel('Predicho')
     plt.tight_layout()
     
-    filename = f'confusion_matrix_{method_name.lower().replace(" ", "_")}.png'
+    filename = f'confusion_matrix_{method_name.lower().replace(" ", "_").replace("-", "_")}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -1051,9 +1210,9 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
 # ============================================================================
 
 if __name__ == "__main__":
-    """Pruebas del módulo GA con enfoque en utilización"""
+    """Pruebas del módulo GA con comportamiento adaptativo"""
     print("="*70)
-    print("🧬 GA LOAD BALANCER - ENFOQUE EN UTILIZACIÓN DE CORES")
+    print("🧬 GA LOAD BALANCER ADAPTATIVO")
     print("="*70)
     print(f"Cores disponibles: {AVAILABLE_CORES}")
     
@@ -1068,12 +1227,12 @@ if __name__ == "__main__":
             print(f"   Clase {label}: {count} ({count/len(df_test)*100:.1f}%)")
     
     print("\n" + "="*70)
-    print("🚀 INICIANDO VECTORIZACIÓN CON GA")
+    print("🚀 INICIANDO VECTORIZACIÓN CON GA ADAPTATIVO")
     print("="*70)
     
-    X, tiempo, stats = vectorize_with_ga_load_balancing(
+    X, tiempo, stats = vectorize_with_ga_adaptive_load_balancing(
         df_test,
-        config=GA_CONFIG,
+        config=GA_CONFIG_ADAPTIVE,
         verbose=True,
         train_model=True
     )
@@ -1081,19 +1240,17 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("✅ RESULTADO FINAL")
     print("="*70)
+    print(f"  Modo:                   {'ADAPTATIVO' if stats['adaptive'] else 'ESTÁTICO'}")
     print(f"  Textos procesados:      {X.shape[0]:,}")
     print(f"  Dimensiones del vector: {X.shape[1]:,}")
     print(f"  Tiempo total:           {tiempo:.2f}s")
     print(f"  Tiempo GA:              {stats['ga_time']:.2f}s")
     print(f"  Tiempo vectorización:   {stats['vectorization_time']:.2f}s")
     print(f"  Cores utilizados:       {stats['num_cores']}")
-    print(f"  Tareas creadas:         {stats['num_tasks']}")
-    print(f"  Subtareas creadas:      {stats['num_subtasks']}")
     
     if 'mlp_stats' in stats:
         print(f"\n🧠 RESULTADOS DEL MODELO:")
         print(f"  Accuracy:               {stats['mlp_stats']['accuracy']:.4f}")
-        print(f"  Tiempo entrenamiento:   "
-              f"{stats['mlp_stats']['train_time']:.2f}s")
+        print(f"  Tiempo entrenamiento:   {stats['mlp_stats']['train_time']:.2f}s")
     
     print("="*70)

@@ -1,11 +1,18 @@
 """
-PSO.py
+SimulatedAnnealing.py
 
-Balanceo de Carga Dinámico Basado en Particle Swarm Optimization (PSO)
-======================================================================
+Balanceo de Carga Dinámico Basado en Simulated Annealing (SA)
+==============================================================
 
 VERSIÓN MEJORADA: Enfoque en UTILIZACIÓN de cores con subtareas aleatorias
-Similar a GA.py, pero usando PSO como metaheurística de optimización.
+Similar a GA.py, PSO.py, WOA.py y Hill Climbing, pero usando Simulated Annealing.
+
+Simulated Annealing es una metaheurística inspirada en el proceso de recocido en metalurgia:
+1. Comienza con una solución inicial y temperatura alta
+2. Explora el espacio de búsqueda aceptando movimientos buenos y malos
+3. La probabilidad de aceptar movimientos malos decrece con la temperatura
+4. La temperatura se reduce gradualmente (enfriamiento)
+5. Converge a una solución de alta calidad evitando óptimos locales
 """
 
 import os, re, csv, time
@@ -32,14 +39,15 @@ STOP_WORDS = frozenset([
 
 AVAILABLE_CORES = cpu_count()
 
-PSO_CONFIG = {
-    'num_particles': 20,
-    'num_iterations': 30,
-    'w': 0.729,
-    'c1': 1.49445,
-    'c2': 1.49445,
-    'early_stop_iters': 15,
-    'num_cores': AVAILABLE_CORES
+SIMULATED_ANNEALING_CONFIG = {
+    'initial_temperature': 100.0,  # Temperatura inicial alta
+    'final_temperature': 0.1,       # Temperatura final baja
+    'cooling_rate': 0.95,           # Tasa de enfriamiento (alpha)
+    'iterations_per_temp': 20,      # Iteraciones por nivel de temperatura
+    'max_iterations': 300,          # Máximo número de iteraciones
+    'neighbor_size': 30,            # Cantidad de vecinos a generar por iteración
+    'perturbation_rate': 0.25,      # Tasa de perturbación
+    'num_cores': AVAILABLE_CORES,   # Cores a distribuir tareas
 }
 
 # Compilar regex una sola vez
@@ -89,18 +97,22 @@ class TaskMapping:
         self.fitness_value: float = 0.0
     
     def assign_task(self, processor_id: int, task_id: int):
+        """Asigna una tarea a un procesador"""
         self.assignment[processor_id].append(task_id)
     
     def get_processor_tasks(self, processor_id: int) -> List[int]:
+        """Obtiene las tareas asignadas a un procesador"""
         return self.assignment[processor_id]
     
     def copy(self) -> 'TaskMapping':
+        """Crea una copia profunda del mapeo"""
         new_mapping = TaskMapping(self.num_processors)
         new_mapping.assignment = [queue[:] for queue in self.assignment]
         new_mapping.fitness_value = self.fitness_value
         return new_mapping
     
     def validate_and_fix(self, num_tasks: int):
+        """Valida y corrige IDs de tarea inválidos"""
         for proc_id in range(self.num_processors):
             self.assignment[proc_id] = [
                 tid for tid in self.assignment[proc_id]
@@ -112,7 +124,7 @@ class TaskMapping:
 # ============================================================================
 
 def procesar_texto(texto: str) -> List[str]:
-    """Limpieza optimizada con regex compilados"""
+    """Limpieza optimizada de texto con regex compilados"""
     if not texto:
         return []
     texto = texto.lower()
@@ -122,7 +134,10 @@ def procesar_texto(texto: str) -> List[str]:
 
 
 def estimate_task_complexity(texts: List[str]) -> int:
-    """Estima el tiempo de procesamiento para un chunk de textos"""
+    """
+    Estima el costo computacional de procesar un conjunto de textos.
+    Considera tanto el número de textos como su longitud.
+    """
     if not texts:
         return 1
     
@@ -133,7 +148,10 @@ def estimate_task_complexity(texts: List[str]) -> int:
 
 
 def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[Tuple[int, Any]]:
-    """Worker para vectorizar un chunk"""
+    """
+    Worker para vectorizar un chunk de textos en paralelo.
+    Retorna tuplas (índice_original, vector) para mantener el orden.
+    """
     texts, vectorizer, original_indices = args
     
     if not texts or not original_indices:
@@ -152,14 +170,19 @@ def vectorize_chunk(args: Tuple[List[str], TfidfVectorizer, List[int]]) -> List[
 
 
 def calculate_optimal_chunk_size(total_texts: int, num_cores: int) -> int:
+    """Calcula el tamaño óptimo de chunk basado en el total de textos"""
     chunk_size = total_texts // 10
     return chunk_size
 
 
 def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> List[Subtask]:
-    """Subdivide una tarea en múltiples subtareas de tamaño aleatorio"""
+    """
+    Subdivide una tarea principal en múltiples subtareas de tamaño aleatorio.
+    Esto permite una granularidad más fina en la distribución de carga.
+    """
     total_texts = len(task.texts)
     
+    # Si hay menos textos que subtareas deseadas, crear una sola subtarea
     if total_texts < num_subtasks:
         return [Subtask(
             subtask_id=0,
@@ -169,12 +192,15 @@ def create_subtasks_from_task(task: Task, num_subtasks: int, task_id: int) -> Li
             parent_task_id=task_id
         )]
     
+    # Generar pesos aleatorios y normalizar
     weights = np.random.random(num_subtasks)
     weights = weights / weights.sum()
     
+    # Calcular tamaños de subtareas
     subtask_sizes = (weights * total_texts).astype(int)
-    subtask_sizes[-1] = total_texts - subtask_sizes[:-1].sum()
+    subtask_sizes[-1] = total_texts - subtask_sizes[:-1].sum()  # Ajustar último
     
+    # Crear subtareas
     subtasks = []
     current_idx = 0
     
@@ -207,10 +233,11 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
                            processor_states: List[ProcessorState],
                            num_cores: int, show_details: bool = True):
     """
-    Muestra estadísticas de UTILIZACIÓN de cores
+    Muestra estadísticas detalladas de utilización de cores.
+    Analiza cómo se distribuye la carga entre los procesadores.
     """
     print("\n" + "="*80)
-    print("⚡ ANÁLISIS DE UTILIZACIÓN DE CORES (PSO)")
+    print("🔥 ANÁLISIS DE UTILIZACIÓN DE CORES (Simulated Annealing)")
     print("="*80)
     
     # Calcular cargas finales por core
@@ -230,7 +257,7 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     avg_load = sum(final_loads) / num_cores if num_cores > 0 else 0.0
     total_load = sum(final_loads)
     
-    # Calcular utilizaciones relativas
+    # Calcular utilizaciones relativas (como porcentaje del máximo)
     utilizations = [(load / max_load * 100) if max_load > 0 else 0.0 
                     for load in final_loads]
     
@@ -238,14 +265,14 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     max_util = max(utilizations)
     avg_util = sum(utilizations) / num_cores
     
-    # Calcular eficiencia del sistema
+    # Eficiencia del sistema (qué tan cerca está el promedio del máximo)
     efficiency = (avg_load / max_load * 100) if max_load > 0 else 0.0
     
-    # Calcular uniformidad
+    # Uniformidad (basado en coeficiente de variación)
     std_dev = (sum((u - avg_util) ** 2 for u in utilizations) / num_cores) ** 0.5
     coef_variation = (std_dev / avg_util) if avg_util > 0 else 0.0
     
-    # Contar cores por rango de utilización
+    # Clasificar cores por rango de utilización
     idle_cores = sum(1 for u in utilizations if u < 50)
     underutilized_cores = sum(1 for u in utilizations if 50 <= u < 80)
     optimal_cores = sum(1 for u in utilizations if 80 <= u < 100)
@@ -270,7 +297,7 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     print(f"  🟢 Óptimos (80-100%):   {optimal_cores:2d} cores ({optimal_cores/num_cores*100:.1f}%)")
     print(f"  🔥 Saturados (>100%):   {saturated_cores:2d} cores ({saturated_cores/num_cores*100:.1f}%)")
     
-    # Clasificar rendimiento
+    # Evaluar calidad global del balanceo
     if optimal_cores >= num_cores * 0.8:
         status = "✅ EXCELENTE - Utilización óptima"
     elif optimal_cores >= num_cores * 0.6:
@@ -282,7 +309,7 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     
     print(f"\n💯 EVALUACIÓN:          {status}")
     
-    # Mostrar detalle por core
+    # Mostrar detalle por core si se solicita
     if show_details:
         print(f"\n📋 DETALLE POR CORE:")
         print(f"  {'Core':<6} {'Tareas':<8} {'Carga':<12} {'Utilización':<15} {'Barra Visual':<30}")
@@ -293,21 +320,21 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
             tasks_count = task_counts[proc_id]
             util = utilizations[proc_id]
             
-            # Barra visual
-            bar_length = int(min(util, 100) / 5)  # 0-100% -> 0-20 chars
+            # Crear barra visual de utilización
+            bar_length = int(min(util, 100) / 5)  # 0-100% mapea a 0-20 chars
             bar = '█' * bar_length + '░' * (20 - bar_length)
             
             # Clasificar por utilización
             if util < 50:
-                color = "🔴"  # Ocioso
+                status_icon = "🔴"
             elif util < 80:
-                color = "🟡"  # Subutilizado
+                status_icon = "🟡"
             elif util <= 100:
-                color = "🟢"  # Óptimo
+                status_icon = "🟢"
             else:
-                color = "🔥"  # Saturado
+                status_icon = "🔥"
             
-            print(f"  {color} {proc_id:<4} {tasks_count:<8} {load:<12,} "
+            print(f"  {status_icon} {proc_id:<4} {tasks_count:<8} {load:<12,} "
                   f"{util:>6.1f}%          {bar}")
         
         # Mostrar distribución de tareas si hay pocos cores
@@ -324,120 +351,117 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     print("="*80 + "\n")
 
 
-def track_pso_evolution(swarm_fitness: List[float], iteration: int, 
-                       best_global_fitness: float):
-    """Muestra el progreso del PSO con énfasis en utilización"""
-    avg_fitness = sum(swarm_fitness) / len(swarm_fitness)
-    worst_fitness = min(swarm_fitness)
-    
-    # Crear barra de progreso
-    progress = best_global_fitness
-    bar_length = int(progress * 20)
+def track_sa_evolution(current_fitness: float, best_fitness: float, 
+                      temperature: float, iteration: int, accepted: bool):
+    """
+    Muestra el progreso del algoritmo Simulated Annealing.
+    """
+    # Crear barra de progreso basada en el mejor fitness
+    bar_length = int(best_fitness * 20)
     bar = '█' * bar_length + '░' * (20 - bar_length)
     
-    print(f"  Iter {iteration:2d}: "
-          f"Best={best_global_fitness:.4f} "
-          f"Avg={avg_fitness:.4f} "
-          f"[{bar}]")
+    # Indicador de aceptación
+    accept_icon = "✓" if accepted else "✗"
+    
+    # Indicador de temperatura (🔥 caliente, ❄️ frío)
+    if temperature > 50:
+        temp_icon = "🔥"
+    elif temperature > 10:
+        temp_icon = "🌡️"
+    else:
+        temp_icon = "❄️"
+    
+    print(f"  Iter {iteration:3d} {temp_icon}: "
+          f"T={temperature:6.2f} "
+          f"Current={current_fitness:.4f} "
+          f"Best={best_fitness:.4f} "
+          f"{accept_icon} [{bar}]")
 
 
 # ============================================================================
-# PARTICLE SWARM OPTIMIZATION - ENFOCADO EN UTILIZACIÓN
+# SIMULATED ANNEALING - ENFOCADO EN UTILIZACIÓN
 # ============================================================================
 
-class PSOLoadBalancer:
+class SimulatedAnnealingLoadBalancer:
     """
-    PSO para Balanceo de Carga Dinámico
-    VERSIÓN MEJORADA: Maximiza utilización uniforme de cores
+    Simulated Annealing para Balanceo de Carga Dinámico.
+    VERSIÓN MEJORADA: Maximiza utilización uniforme de cores.
+    
+    El algoritmo funciona mediante un proceso de enfriamiento simulado:
+    
+    1. INICIALIZACIÓN:
+       - Genera una solución inicial (puede ser greedy o aleatoria)
+       - Establece temperatura inicial alta
+       - Evalúa el fitness inicial
+    
+    2. PROCESO DE ENFRIAMIENTO:
+       En cada nivel de temperatura:
+       - Genera vecinos mediante perturbaciones
+       - Evalúa fitness de cada vecino
+       - Acepta mejoras siempre
+       - Acepta empeoramientos con probabilidad P = exp(-ΔE/T)
+         donde ΔE es el cambio de energía (fitness negativo)
+    
+    3. REDUCCIÓN DE TEMPERATURA:
+       - T_new = alpha * T_current (enfriamiento geométrico)
+       - A medida que T → 0, se aceptan menos empeoramientos
+       - Converge a óptimo local o global
+    
+    4. CRITERIO DE PARADA:
+       - Temperatura mínima alcanzada
+       - Número máximo de iteraciones
+       - No hay mejora durante varias iteraciones
     """
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.num_processors = config['num_cores']
-        self.num_particles = config['num_particles']
-        self.num_iterations = config['num_iterations']
-        self.w = config['w']
-        self.c1 = config['c1']
-        self.c2 = config['c2']
-        self.early_stop_iters = config['early_stop_iters']
-        self.H = 1.2
-        self.L = 0.8
+        self.initial_temperature = config['initial_temperature']
+        self.final_temperature = config['final_temperature']
+        self.cooling_rate = config['cooling_rate']
+        self.iterations_per_temp = config['iterations_per_temp']
+        self.max_iterations = config['max_iterations']
+        self.neighbor_size = config['neighbor_size']
+        self.perturbation_rate = config['perturbation_rate']
     
-    def initialize_swarm(self, num_tasks: int,
-                        processor_states: List[ProcessorState]) -> List[TaskMapping]:
+    def initialize_solution(self, num_tasks: int,
+                           processor_states: List[ProcessorState]) -> TaskMapping:
         """
-        Inicializa enjambre con estrategias conscientes de utilización
+        Genera solución inicial usando estrategia greedy.
+        Asigna cada tarea al procesador menos cargado.
         """
-        swarm = []
+        mapping = TaskMapping(self.num_processors)
         
+        # Calcular cargas actuales
         current_loads = [ps.total_load() for ps in processor_states]
-        max_load = max(current_loads) if current_loads else 1.0
         
-        if max_load > 0:
-            inverse_loads = [max_load - load for load in current_loads]
-            total_inverse = sum(inverse_loads)
-            
-            if total_inverse > 0:
-                probabilities = [inv / total_inverse for inv in inverse_loads]
-            else:
-                probabilities = [1.0 / self.num_processors] * self.num_processors
-        else:
-            probabilities = [1.0 / self.num_processors] * self.num_processors
+        # Asignar cada tarea al procesador menos cargado
+        for task_id in range(num_tasks):
+            # Considerar tanto carga actual como tareas ya asignadas en este mapeo
+            loads_in_mapping = [
+                current_loads[p] + len(mapping.get_processor_tasks(p))
+                for p in range(self.num_processors)
+            ]
+            least_loaded = np.argmin(loads_in_mapping)
+            mapping.assign_task(least_loaded, task_id)
         
-        for i in range(self.num_particles):
-            mapping = TaskMapping(self.num_processors)
-            
-            if i == 0:
-                # ESTRATEGIA 1: GREEDY - Asignar al menos cargado
-                for task_idx in range(num_tasks):
-                    loads_in_mapping = [
-                        current_loads[p] + len(mapping.get_processor_tasks(p))
-                        for p in range(self.num_processors)
-                    ]
-                    least_loaded = np.argmin(loads_in_mapping)
-                    mapping.assign_task(least_loaded, task_idx)
-                    
-            elif i == 1:
-                # ESTRATEGIA 2: WEIGHTED RANDOM
-                for task_idx in range(num_tasks):
-                    processor = np.random.choice(
-                        self.num_processors, 
-                        p=probabilities
-                    )
-                    mapping.assign_task(processor, task_idx)
-                    
-            elif i == 2:
-                # ESTRATEGIA 3: ROUND-ROBIN desde menos cargado
-                sorted_procs = np.argsort(current_loads)
-                for task_idx in range(num_tasks):
-                    processor = sorted_procs[task_idx % self.num_processors]
-                    mapping.assign_task(processor, task_idx)
-                    
-            else:
-                # ESTRATEGIA 4+: MIXTO
-                for task_idx in range(num_tasks):
-                    if np.random.random() < 0.7:
-                        processor = np.random.choice(
-                            self.num_processors,
-                            p=probabilities
-                        )
-                    else:
-                        processor = np.random.randint(0, self.num_processors)
-                    mapping.assign_task(processor, task_idx)
-            
-            swarm.append(mapping)
-        
-        return swarm
+        return mapping
     
     def calculate_fitness(self, mapping: TaskMapping, tasks,
                          processor_states: List[ProcessorState]) -> float:
         """
-        Calcula fitness enfocado en MAXIMIZAR UTILIZACIÓN UNIFORME
+        Calcula fitness enfocado en MAXIMIZAR UTILIZACIÓN UNIFORME.
+        
+        La función evalúa:
+        1. Utilización mínima: Asegura que ningún core esté ocioso
+        2. Eficiencia global: Mide uso general del sistema
+        3. Uniformidad: Penaliza desbalances grandes
+        4. Throughput: Capacidad de procesamiento del sistema
         """
         num_tasks = len(tasks)
         mapping.validate_and_fix(num_tasks)
 
-        # Calcular cargas finales
+        # Calcular cargas finales por procesador
         final_loads = []
         
         for proc_id in range(self.num_processors):
@@ -449,26 +473,25 @@ class PSOLoadBalancer:
             )
             final_loads.append(current_load + new_load)
 
-        # Calcular métricas de utilización
+        # Calcular métricas base
         max_load = max(final_loads) if final_loads else 1.0
         min_load = min(final_loads) if final_loads else 0.0
         avg_load = sum(final_loads) / self.num_processors if self.num_processors > 0 else 0.0
         total_load = sum(final_loads)
 
-        # COMPONENTE 1: UTILIZACIÓN MÍNIMA (queremos que todos trabajen)
+        # COMPONENTE 1: UTILIZACIÓN MÍNIMA
         if max_load > 0:
             min_utilization = min_load / max_load
         else:
             min_utilization = 0.0
 
-        # COMPONENTE 2: EFICIENCIA GLOBAL (uso del sistema)
-        ideal_load_per_core = total_load / self.num_processors
-        if ideal_load_per_core > 0:
+        # COMPONENTE 2: EFICIENCIA GLOBAL
+        if max_load > 0:
             efficiency = avg_load / max_load
         else:
             efficiency = 0.0
 
-        # COMPONENTE 3: UNIFORMIDAD (coeficiente de variación inverso)
+        # COMPONENTE 3: UNIFORMIDAD
         if avg_load > 0:
             std_dev = (sum((load - avg_load) ** 2 for load in final_loads) / self.num_processors) ** 0.5
             coef_variation = std_dev / avg_load
@@ -476,13 +499,13 @@ class PSOLoadBalancer:
         else:
             uniformity = 0.0
 
-        # COMPONENTE 4: THROUGHPUT POTENCIAL (inverso del makespan)
+        # COMPONENTE 4: THROUGHPUT
         if max_load > 0:
             throughput_score = avg_load / max_load
         else:
             throughput_score = 0.0
 
-        # FITNESS FINAL: Enfocado en utilización
+        # FITNESS FINAL: Combinación ponderada
         fitness = (
             0.35 * min_utilization +
             0.25 * efficiency +
@@ -490,156 +513,249 @@ class PSOLoadBalancer:
             0.10 * throughput_score
         )
         
-        # Bonificación si TODOS los cores están bien utilizados
+        # Bonificación si mayoría de cores están bien utilizados
         cores_well_utilized = sum(1 for load in final_loads if load >= 0.8 * avg_load)
         if cores_well_utilized >= 0.85 * self.num_processors:
             fitness *= 1.2
         
-        # Penalización severa si algún core está muy subutilizado
+        # Penalización si algún core está muy subutilizado
         if min_utilization < 0.5:
             fitness *= 0.7
 
         return max(0.0, min(1.0, fitness))
     
+    def generate_neighbor(self, current_mapping: TaskMapping, 
+                         num_tasks: int) -> TaskMapping:
+        """
+        Genera un vecino mediante perturbación aleatoria.
+        
+        Estrategias de perturbación:
+        1. Mover una tarea aleatoria a otro procesador
+        2. Intercambiar dos tareas entre procesadores
+        3. Mover bloque pequeño de tareas
+        """
+        neighbor = current_mapping.copy()
+        
+        # Seleccionar estrategia de perturbación aleatoriamente
+        strategy = np.random.choice(['move', 'swap', 'block'])
+        
+        if strategy == 'move':
+            # ESTRATEGIA 1: Mover una tarea a otro procesador
+            procs_with_tasks = [
+                p for p in range(self.num_processors)
+                if len(neighbor.get_processor_tasks(p)) > 0
+            ]
+            
+            if procs_with_tasks:
+                src_proc = np.random.choice(procs_with_tasks)
+                src_tasks = neighbor.get_processor_tasks(src_proc)
+                
+                if src_tasks:
+                    task_idx = np.random.randint(0, len(src_tasks))
+                    task_id = src_tasks[task_idx]
+                    
+                    dst_proc = np.random.randint(0, self.num_processors)
+                    while dst_proc == src_proc and self.num_processors > 1:
+                        dst_proc = np.random.randint(0, self.num_processors)
+                    
+                    neighbor.assignment[src_proc].pop(task_idx)
+                    neighbor.assignment[dst_proc].append(task_id)
+        
+        elif strategy == 'swap':
+            # ESTRATEGIA 2: Intercambiar dos tareas entre procesadores
+            procs_with_tasks = [
+                p for p in range(self.num_processors)
+                if len(neighbor.get_processor_tasks(p)) > 0
+            ]
+            
+            if len(procs_with_tasks) >= 2:
+                proc1, proc2 = np.random.choice(procs_with_tasks, 2, replace=False)
+                tasks1 = neighbor.get_processor_tasks(proc1)
+                tasks2 = neighbor.get_processor_tasks(proc2)
+                
+                if tasks1 and tasks2:
+                    idx1 = np.random.randint(0, len(tasks1))
+                    idx2 = np.random.randint(0, len(tasks2))
+                    
+                    neighbor.assignment[proc1][idx1], neighbor.assignment[proc2][idx2] = \
+                        neighbor.assignment[proc2][idx2], neighbor.assignment[proc1][idx1]
+        
+        else:  # block
+            # ESTRATEGIA 3: Mover bloque de tareas
+            procs_with_tasks = [
+                p for p in range(self.num_processors)
+                if len(neighbor.get_processor_tasks(p)) > 1
+            ]
+            
+            if procs_with_tasks:
+                src_proc = np.random.choice(procs_with_tasks)
+                src_tasks = neighbor.get_processor_tasks(src_proc)
+                
+                block_size = min(
+                    max(1, int(len(src_tasks) * self.perturbation_rate)),
+                    len(src_tasks) - 1
+                )
+                
+                dst_proc = np.random.randint(0, self.num_processors)
+                while dst_proc == src_proc and self.num_processors > 1:
+                    dst_proc = np.random.randint(0, self.num_processors)
+                
+                for _ in range(block_size):
+                    if neighbor.assignment[src_proc]:
+                        task_id = neighbor.assignment[src_proc].pop(0)
+                        neighbor.assignment[dst_proc].append(task_id)
+        
+        neighbor.validate_and_fix(num_tasks)
+        return neighbor
+    
+    def acceptance_probability(self, current_fitness: float, 
+                              new_fitness: float, temperature: float) -> float:
+        """
+        Calcula la probabilidad de aceptar una solución peor.
+        
+        Fórmula de Metropolis:
+        P = exp((new_fitness - current_fitness) / temperature)
+        
+        - Si new_fitness > current_fitness: siempre acepta (P > 1)
+        - Si new_fitness < current_fitness: acepta con probabilidad que decrece
+          exponencialmente con la diferencia y con la temperatura
+        """
+        if new_fitness > current_fitness:
+            return 1.0
+        
+        # Diferencia de fitness (negativa para empeoramientos)
+        delta_fitness = new_fitness - current_fitness
+        
+        # Probabilidad de aceptación
+        # A temperatura alta, acepta más empeoramientos
+        # A temperatura baja, rechaza más empeoramientos
+        probability = np.exp(delta_fitness / temperature)
+        
+        return probability
+    
     def optimize(self, tasks,
                 processor_states: List[ProcessorState],
                 verbose: bool = False) -> TaskMapping:
         """
-        Optimización PSO principal con enfoque en utilización
+        Optimización Simulated Annealing principal con enfoque en utilización.
+        
+        ALGORITMO:
+        1. Inicializar con solución greedy y temperatura alta
+        2. Mientras T > T_final y no se exceda max_iterations:
+           - Para cada iteración en el nivel de temperatura:
+             * Generar vecino
+             * Calcular fitness del vecino
+             * Si mejora: aceptar
+             * Si empeora: aceptar con probabilidad P = exp(-ΔE/T)
+           - Enfriar: T = alpha * T
+        3. Retornar mejor solución encontrada
         """
         num_tasks = len(tasks)
         
         if num_tasks == 0:
             return TaskMapping(self.num_processors)
         
-        # Inicializar enjambre con conocimiento de cargas actuales
-        swarm = self.initialize_swarm(num_tasks, processor_states)
+        # Solución inicial
+        current_solution = self.initialize_solution(num_tasks, processor_states)
+        current_fitness = self.calculate_fitness(current_solution, tasks, processor_states)
         
-        # Velocidades (inicialmente cero)
-        velocities = [np.zeros(num_tasks, dtype=int) for _ in range(self.num_particles)]
+        # Mejor solución global
+        best_solution = current_solution.copy()
+        best_fitness = current_fitness
         
-        # Evaluar fitness inicial
-        fitness_values = [
-            self.calculate_fitness(mapping, tasks, processor_states)
-            for mapping in swarm
-        ]
-        
-        # Mejores personales
-        personal_best = [mapping.copy() for mapping in swarm]
-        personal_best_fitness = fitness_values.copy()
-        
-        # Mejor global
-        best_idx = int(np.argmax(fitness_values))
-        global_best = swarm[best_idx].copy()
-        global_best_fitness = fitness_values[best_idx]
+        # Inicializar temperatura
+        temperature = self.initial_temperature
         
         if verbose:
-            print(f"\n🐝 Evolución del PSO:")
-            track_pso_evolution(fitness_values, 0, global_best_fitness)
+            print(f"\n🔥 Evolución del Simulated Annealing:")
+            print(f"  Temperatura inicial: {temperature:.2f}")
+            print(f"  Tasa de enfriamiento: {self.cooling_rate}")
+            print(f"  Iteraciones por temperatura: {self.iterations_per_temp}")
         
-        # Variables para early stopping
-        no_improve_count = 0
+        iteration = 0
         
-        # Ciclo PSO
-        for iteration in range(self.num_iterations):
-            # Actualizar cada partícula
-            for i in range(self.num_particles):
-                # Convertir mapeo a vector
-                position = np.zeros(num_tasks, dtype=int)
-                for proc_id in range(self.num_processors):
-                    for task_id in swarm[i].get_processor_tasks(proc_id):
-                        if task_id < num_tasks:
-                            position[task_id] = proc_id
+        # Ciclo principal de SA
+        while temperature > self.final_temperature and iteration < self.max_iterations:
+            # Múltiples iteraciones en cada nivel de temperatura
+            for _ in range(self.iterations_per_temp):
+                iteration += 1
                 
-                personal_vec = np.zeros(num_tasks, dtype=int)
-                for proc_id in range(self.num_processors):
-                    for task_id in personal_best[i].get_processor_tasks(proc_id):
-                        if task_id < num_tasks:
-                            personal_vec[task_id] = proc_id
+                if iteration >= self.max_iterations:
+                    break
                 
-                global_vec = np.zeros(num_tasks, dtype=int)
-                for proc_id in range(self.num_processors):
-                    for task_id in global_best.get_processor_tasks(proc_id):
-                        if task_id < num_tasks:
-                            global_vec[task_id] = proc_id
+                # Generar vecino
+                neighbor = self.generate_neighbor(current_solution, num_tasks)
+                neighbor_fitness = self.calculate_fitness(neighbor, tasks, processor_states)
                 
-                # Actualizar velocidad
-                r1 = np.random.random()
-                r2 = np.random.random()
+                # Decidir si aceptar el vecino
+                if neighbor_fitness > current_fitness:
+                    # Mejora: aceptar siempre
+                    current_solution = neighbor
+                    current_fitness = neighbor_fitness
+                    accepted = True
+                    
+                    # Actualizar mejor global si corresponde
+                    if current_fitness > best_fitness:
+                        best_solution = current_solution.copy()
+                        best_fitness = current_fitness
+                else:
+                    # Empeoramiento: aceptar con cierta probabilidad
+                    accept_prob = self.acceptance_probability(
+                        current_fitness, neighbor_fitness, temperature
+                    )
+                    
+                    if np.random.random() < accept_prob:
+                        current_solution = neighbor
+                        current_fitness = neighbor_fitness
+                        accepted = True
+                    else:
+                        accepted = False
                 
-                cognitive = (personal_vec - position) * self.c1 * r1
-                social = (global_vec - position) * self.c2 * r2
-                
-                velocities[i] = (self.w * velocities[i] + 
-                                cognitive + social).astype(int)
-                
-                # Limitar velocidad
-                velocities[i] = np.clip(velocities[i], -2, 2)
-                
-                # Actualizar posición
-                new_position = position + velocities[i]
-                new_position = np.clip(new_position, 0, self.num_processors - 1)
-                
-                # Convertir vector a mapeo
-                new_mapping = TaskMapping(self.num_processors)
-                for task_id, proc_id in enumerate(new_position):
-                    new_mapping.assign_task(int(proc_id), task_id)
-                
-                swarm[i] = new_mapping
+                # Mostrar progreso
+                if verbose and iteration % 5 == 0:
+                    track_sa_evolution(
+                        current_fitness, best_fitness, 
+                        temperature, iteration, accepted
+                    )
             
-            # Evaluar fitness
-            fitness_values = [
-                self.calculate_fitness(mapping, tasks, processor_states)
-                for mapping in swarm
-            ]
-            
-            # Actualizar mejores personales
-            for i in range(self.num_particles):
-                if fitness_values[i] > personal_best_fitness[i]:
-                    personal_best[i] = swarm[i].copy()
-                    personal_best_fitness[i] = fitness_values[i]
-            
-            # Actualizar mejor global
-            best_idx = int(np.argmax(fitness_values))
-            if fitness_values[best_idx] > global_best_fitness:
-                improvement = fitness_values[best_idx] - global_best_fitness
-                global_best = swarm[best_idx].copy()
-                global_best_fitness = fitness_values[best_idx]
-                no_improve_count = 0
-                
-                if improvement < 1e-6:
-                    no_improve_count += 1
-            else:
-                no_improve_count += 1
-            
-            if verbose:
-                track_pso_evolution(fitness_values, iteration + 1, global_best_fitness)
-            
-            # Early stopping
-            if no_improve_count >= self.early_stop_iters:
-                if verbose:
-                    print(f"  Early stopping en iteración {iteration + 1}")
-                break
+            # Enfriar temperatura (enfriamiento geométrico)
+            temperature *= self.cooling_rate
         
-        global_best.fitness_value = global_best_fitness
-        global_best.validate_and_fix(num_tasks)
+        if verbose:
+            print(f"\n  Temperatura final: {temperature:.2f}")
+            print(f"  Iteraciones totales: {iteration}")
+            print(f"  Mejor fitness encontrado: {best_fitness:.4f}")
         
-        return global_best
+        # Configurar fitness en mejor solución
+        best_solution.fitness_value = best_fitness
+        best_solution.validate_and_fix(num_tasks)
+        
+        return best_solution
 
 
 # ============================================================================
 # FUNCIÓN PRINCIPAL DE VECTORIZACIÓN
 # ============================================================================
 
-def vectorize_with_pso_load_balancing(
+def vectorize_with_simulated_annealing(
     df,
-    config: Dict[str, Any] = PSO_CONFIG,
+    config: Dict[str, Any] = SIMULATED_ANNEALING_CONFIG,
     verbose: bool = False,
     train_model: bool = False
 ) -> Tuple[Any, float, Dict[str, Any]]:
     """
-    Vectorización TF-IDF con balanceo de carga basado en PSO
-    VERSIÓN ENFOCADA EN UTILIZACIÓN DE CORES CON SUBTAREAS ALEATORIAS
+    Vectorización TF-IDF con balanceo de carga basado en Simulated Annealing.
+    VERSIÓN ENFOCADA EN UTILIZACIÓN DE CORES CON SUBTAREAS ALEATORIAS.
+    
+    Proceso:
+    1. Preparar datos y vocabulario TF-IDF
+    2. Dividir dataset en tareas principales
+    3. Subdividir cada tarea en subtareas de tamaño aleatorio
+    4. Procesar ventanas de subtareas usando SA para balanceo
+    5. Vectorizar en paralelo según asignación SA
+    6. Actualizar cargas acumulativas de procesadores
+    7. Repetir hasta procesar todas las subtareas
+    8. Opcionalmente entrenar modelo MLP
     """
     
     num_cores = config['num_cores']
@@ -648,7 +764,7 @@ def vectorize_with_pso_load_balancing(
     
     print(f"  Usando {num_cores} cores para procesamiento paralelo")
     
-    # Inicializar vectorizador
+    # Inicializar vectorizador TF-IDF
     vectorizer = TfidfVectorizer(
         tokenizer=None,
         lowercase=False,
@@ -661,7 +777,7 @@ def vectorize_with_pso_load_balancing(
     fit_time = time.time() - fit_start
     print(f"  Vocabulario listo ({fit_time:.2f}s)")
     
-    # Dividir dataset en tareas
+    # Dividir dataset en tareas principales
     chunk_size = calculate_optimal_chunk_size(total_texts, num_cores)
     print(f"  Chunk size óptimo: {chunk_size}")
     
@@ -681,7 +797,7 @@ def vectorize_with_pso_load_balancing(
     num_tasks_total = len(tasks)
     print(f"  Total de tareas: {num_tasks_total}")
     
-    # Subdividir en subtareas
+    # Subdividir en subtareas con tamaños aleatorios
     num_subtasks_per_task = 4 * num_cores
     print(f"  Subtareas por tarea: {num_subtasks_per_task}")
     print(f"\n  Creando subtareas con tamaños aleatorios...")
@@ -711,26 +827,27 @@ def vectorize_with_pso_load_balancing(
     print(f"    Max textos: {max(all_subtask_text_counts)}")
     print(f"    Promedio: {sum(all_subtask_text_counts)/len(all_subtask_text_counts):.1f}")
     
-    # Inicializar estados de procesador
+    # Inicializar estados de procesador (comienzan con carga cero)
     processor_states = [
         ProcessorState(processor_id=i, current_load=0.0, queue=[])
         for i in range(num_cores)
     ]
     
-    # Inicializar PSO
-    pso = PSOLoadBalancer(config)
+    # Inicializar Simulated Annealing
+    sa = SimulatedAnnealingLoadBalancer(config)
     
-    # Estadísticas
+    # Estadísticas de ejecución
     stats: Dict[str, Any] = {
         'total_texts': total_texts,
         'num_tasks': num_tasks_total,
         'num_subtasks': num_subtasks_total,
         'num_cores': num_cores,
-        'pso_iterations': config['num_iterations'],
-        'pso_particles': config['num_particles'],
+        'sa_initial_temp': config['initial_temperature'],
+        'sa_final_temp': config['final_temperature'],
+        'sa_cooling_rate': config['cooling_rate'],
         'chunk_size': chunk_size,
         'subtasks_per_task': num_subtasks_per_task,
-        'pso_time': 0.0,
+        'sa_time': 0.0,
         'vectorization_time': 0.0,
         'total_time': 0.0
     }
@@ -741,6 +858,7 @@ def vectorize_with_pso_load_balancing(
     processed_subtasks = 0
     window_count = 0
     
+    # Procesar subtareas en ventanas
     window_size = num_subtasks_per_task * 2
     
     while processed_subtasks < num_subtasks_total:
@@ -762,13 +880,13 @@ def vectorize_with_pso_load_balancing(
                       f"max={max(utilizations):.1f}%, "
                       f"avg={sum(utilizations)/len(utilizations):.1f}%")
         
-        # Ejecutar PSO
-        pso_start = time.time()
-        best_mapping = pso.optimize(window_subtasks, processor_states, verbose=verbose)
-        pso_time = time.time() - pso_start
-        stats['pso_time'] += pso_time
+        # Ejecutar SA para encontrar mejor asignación
+        sa_start = time.time()
+        best_mapping = sa.optimize(window_subtasks, processor_states, verbose=verbose)
+        sa_time = time.time() - sa_start
+        stats['sa_time'] += sa_time
         
-        print(f"  (PSO: {pso_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", 
+        print(f"  (SA: {sa_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", 
               end=" ")
         
         if verbose:
@@ -776,9 +894,10 @@ def vectorize_with_pso_load_balancing(
             print_utilization_stats(best_mapping, window_subtasks, 
                                    processor_states, num_cores, show_details=True)
         
-        # Ejecutar vectorización
+        # Ejecutar vectorización en paralelo según asignación SA
         vec_start = time.time()
         
+        # Preparar trabajo para cada procesador
         processor_work = [[] for _ in range(num_cores)]
         processor_indices = [[] for _ in range(num_cores)]
         
@@ -790,6 +909,7 @@ def vectorize_with_pso_load_balancing(
                     processor_work[proc_id].append(subtask)
                     processor_indices[proc_id].extend(subtask.original_indices)
         
+        # Crear argumentos para workers
         work_args = [
             (
                 [text for subtask in proc_subtasks for text in subtask.texts],
@@ -800,6 +920,7 @@ def vectorize_with_pso_load_balancing(
             if proc_subtasks
         ]
         
+        # Ejecutar vectorización en paralelo
         if work_args:
             with Pool(processes=num_cores) as pool:
                 chunk_results = pool.map(vectorize_chunk, work_args)
@@ -816,7 +937,7 @@ def vectorize_with_pso_load_balancing(
         else:
             print(f"\n  Vectorización completada en {vec_time:.2f}s")
         
-        # Actualizar cargas (NO resetear)
+        # Actualizar cargas acumulativas (NO resetear - importante para decisiones futuras)
         for proc_id in range(num_cores):
             subtask_indices = best_mapping.get_processor_tasks(proc_id)
             added_load = sum(
@@ -840,7 +961,7 @@ def vectorize_with_pso_load_balancing(
         processed_subtasks = window_end
         window_count += 1
     
-    # Reconstruir matriz X
+    # Reconstruir matriz X completa
     print(f"  Reconstruyendo matriz...")
     
     vectors_list = [vec for _, vec in indexed_vectors]
@@ -853,12 +974,12 @@ def vectorize_with_pso_load_balancing(
     
     print(f"\n  Resumen de tiempos:")
     print(f"  - Total: {total_time:.2f}s")
-    print(f"  - PSO: {stats['pso_time']:.2f}s "
-          f"({stats['pso_time']/total_time*100:.1f}%)")
+    print(f"  - Simulated Annealing: {stats['sa_time']:.2f}s "
+          f"({stats['sa_time']/total_time*100:.1f}%)")
     print(f"  - Vectorización: {stats['vectorization_time']:.2f}s "
           f"({stats['vectorization_time']/total_time*100:.1f}%)")
     
-    # Emparejamiento con etiquetas
+    # Emparejamiento con etiquetas si se va a entrenar modelo
     if train_model and 'class' in df.columns:
         print(f"\n{'='*70}")
         print(f"🔗 EMPAREJAMIENTO VECTOR-ETIQUETA")
@@ -866,6 +987,7 @@ def vectorize_with_pso_load_balancing(
         
         y_original = df['class'].values
         
+        # Crear array de etiquetas alineado con vectores
         y_aligned = np.zeros(len(indexed_vectors), dtype=y_original.dtype)
         
         for i, (original_idx, _) in enumerate(indexed_vectors):
@@ -878,12 +1000,14 @@ def vectorize_with_pso_load_balancing(
             print(f"  - Coinciden?: "
                   f"{'SI' if X.shape[0] == y_aligned.shape[0] else 'NO'}")
         
+        # Mostrar distribución de clases
         unique, counts = np.unique(y_aligned, return_counts=True)
         print(f"\n  📊 Distribución de clases:")
         for label, count in zip(unique, counts):
             print(f"     Clase {label}: {count} "
                   f"({count/len(y_aligned)*100:.1f}%)")
         
+        # Verificar primeras muestras
         print(f"\n  🔍 Verificando primeras 5 muestras:")
         for i in range(min(5, len(indexed_vectors))):
             original_idx, _ = indexed_vectors[i]
@@ -896,8 +1020,9 @@ def vectorize_with_pso_load_balancing(
         
         print(f"{'='*70}\n")
         
+        # Entrenar y evaluar modelo MLP
         mlp_stats = train_and_evaluate_mlp(X, y_aligned, 
-                                          method_name="PSO-Paralelo")
+                                          method_name="SA-Paralelo")
         stats['mlp_stats'] = mlp_stats
     
     return X, total_time, stats
@@ -908,7 +1033,10 @@ def vectorize_with_pso_load_balancing(
 # ============================================================================
 
 def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]:
-    """Entrena un MLPClassifier y muestra matriz de confusión"""
+    """
+    Entrena un MLPClassifier y evalúa su rendimiento.
+    Genera matriz de confusión y reporte de clasificación.
+    """
     print(f"\n{'='*70}")
     print(f"🧠 ENTRENAMIENTO DE RED NEURONAL MLP ({method_name})")
     print(f"{'='*70}")
@@ -949,6 +1077,7 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     print(f"\n  Matriz de Confusión:")
     print(f"  {cm}")
     
+    # Generar y guardar gráfico de matriz de confusión
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                 xticklabels=['No Suicida', 'Suicida'],
@@ -985,9 +1114,9 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
 # ============================================================================
 
 if __name__ == "__main__":
-    """Pruebas del módulo PSO con enfoque en utilización"""
+    """Pruebas del módulo Simulated Annealing con enfoque en utilización"""
     print("="*70)
-    print("🐝 PSO LOAD BALANCER - ENFOQUE EN UTILIZACIÓN DE CORES")
+    print("🔥 SIMULATED ANNEALING LOAD BALANCER - ENFOQUE EN UTILIZACIÓN DE CORES")
     print("="*70)
     print(f"Cores disponibles: {AVAILABLE_CORES}")
     
@@ -1002,12 +1131,12 @@ if __name__ == "__main__":
             print(f"   Clase {label}: {count} ({count/len(df_test)*100:.1f}%)")
     
     print("\n" + "="*70)
-    print("🚀 INICIANDO VECTORIZACIÓN CON PSO")
+    print("🚀 INICIANDO VECTORIZACIÓN CON SIMULATED ANNEALING")
     print("="*70)
     
-    X, tiempo, stats = vectorize_with_pso_load_balancing(
+    X, tiempo, stats = vectorize_with_simulated_annealing(
         df_test,
-        config=PSO_CONFIG,
+        config=SIMULATED_ANNEALING_CONFIG,
         verbose=True,
         train_model=True
     )
@@ -1018,7 +1147,7 @@ if __name__ == "__main__":
     print(f"  Textos procesados:      {X.shape[0]:,}")
     print(f"  Dimensiones del vector: {X.shape[1]:,}")
     print(f"  Tiempo total:           {tiempo:.2f}s")
-    print(f"  Tiempo PSO:             {stats['pso_time']:.2f}s")
+    print(f"  Tiempo SA:              {stats['sa_time']:.2f}s")
     print(f"  Tiempo vectorización:   {stats['vectorization_time']:.2f}s")
     print(f"  Cores utilizados:       {stats['num_cores']}")
     print(f"  Tareas creadas:         {stats['num_tasks']}")
