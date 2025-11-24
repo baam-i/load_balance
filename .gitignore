@@ -1,20 +1,22 @@
 .venv/
+.vscode/
 __pycache__/
+<<<<<<< HEAD
 
 Scheduling.pdf
 E2.pdf
 Load_Balance.docx
 Load_Balance.pdf
+=======
+*.pdf
+*.docx
+>>>>>>> 4426517c149b5ed13d1483ac37927ecc243cb74d
 
 Suicide_Detection.csv
-
 tiempo.csv
 ga_results.csv
 comparison_times.csv
 
 g2.py
 tempCodeRunnerFile.py
-
-comparison_times.png
-comparison_speedup.png
-comp_barras.png
+*.png
