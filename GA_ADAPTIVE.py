@@ -30,9 +30,9 @@ STOP_WORDS = {"the", "and", "is", "in", "at", "of", "a", "to", "for", "on",
 
 AVAILABLE_CORES = cpu_count()
 
-GA_CONFIG = {
-    'population_size': 30,
-    'num_generations': 10,
+GA_CONFIG_ADAPTIVE = {
+    'population_size': 20,
+    'num_generations': 5,
     'heavy_multiplier': 1.2,
     'light_multiplier': 0.8,
     'mutation_rate': 0.15,
@@ -918,9 +918,9 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
 # FUNCIÓN PRINCIPAL DE VECTORIZACIÓN
 # ============================================================================
 
-def vectorize_with_ga_load_balancing(
+def vectorize_with_ga_adaptive_load_balancing(
     df,
-    config: Dict[str, Any] = GA_CONFIG,
+    config: Dict[str, Any] = GA_CONFIG_ADAPTIVE,
     verbose: bool = False,
     train_model: bool = False
 ) -> Tuple[Any, float, Dict[str, Any]]:
@@ -1230,9 +1230,9 @@ if __name__ == "__main__":
     print("🚀 INICIANDO VECTORIZACIÓN CON GA ADAPTATIVO")
     print("="*70)
     
-    X, tiempo, stats = vectorize_with_ga_load_balancing(
+    X, tiempo, stats = vectorize_with_ga_adaptive_load_balancing(
         df_test,
-        config=GA_CONFIG,
+        config=GA_CONFIG_ADAPTIVE,
         verbose=True,
         train_model=True
     )

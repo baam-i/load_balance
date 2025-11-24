@@ -33,8 +33,8 @@ STOP_WORDS = frozenset([
 AVAILABLE_CORES = cpu_count()
 
 PSO_CONFIG = {
-    'num_particles': 25,
-    'num_iterations': 60,
+    'num_particles': 20,
+    'num_iterations': 30,
     'w': 0.729,
     'c1': 1.49445,
     'c2': 1.49445,

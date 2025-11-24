@@ -1,7 +1,8 @@
 """
 main.py
 
-Script de Comparación: GA-Paralelo vs Secuencial vs PSO-Paralelo
+Script de Comparación: Para varias optimizaciones con metaheuristicas con el objetivo de 
+distribuir chunks, tasks y ultimamente subtasks (grupos de tweets) para vectorizar paralelamente entre todos los cores
 ================================================================
 """
 
@@ -24,6 +25,7 @@ import matplotlib.ticker
 from secuencial import sequential_vectorize
 from PSO import vectorize_with_pso_load_balancing, PSO_CONFIG
 from GA import vectorize_with_ga_load_balancing, GA_CONFIG
+from GA_ADAPTIVE import vectorize_with_ga_adaptive_load_balancing, GA_CONFIG_ADAPTIVE
 from WOA import vectorize_with_woa_load_balancing, WOA_CONFIG
 from HILL_CLIMBING import vectorize_with_hill_climbing, HILL_CLIMBING_CONFIG
 from SA import vectorize_with_simulated_annealing, SIMULATED_ANNEALING_CONFIG
@@ -40,6 +42,7 @@ def compare_pipelines(
     output_speedup_png: str = "comparison_speedup.png",
     # geneticos
     ga_config: Dict[str, Any] = GA_CONFIG,
+    aga_config: Dict[str,Any] = GA_CONFIG_ADAPTIVE,
     # bio inspirados
     pso_config: Dict[str, Any] = PSO_CONFIG,
     woa_config: Dict[str, Any] = WOA_CONFIG,
@@ -74,11 +77,11 @@ def compare_pipelines(
     print(f"\nAlgoritmos a comparar:")
     print("  1. Secuencial (baseline)")
     print("  2. GA-Paralelo (Genetic Algorithm)")
-    print("  3. PSO-Paralelo (Particle Swarm Optimization)")
-    print("  4. WOA-Paralelo (Whale Optimization Algorithm)")
-    print("  5. Hill Climbing-Paralelo")
-    print("  6. Simulated Annealing-Paralelo")
-
+    print("  3. AGA-Paralelo (Adaptive Genetic Algorithm)")
+    print("  4. PSO-Paralelo (Particle Swarm Optimization)")
+    print("  5. WOA-Paralelo (Whale Optimization Algorithm)")
+    print("  6. Hill Climbing-Paralelo")
+    print("  7. Simulated Annealing-Paralelo")
     
     if verbose:
         print(f"\n⚙️  Modo VERBOSE activado: Se mostrarán detalles de evolución")
@@ -129,17 +132,20 @@ def compare_pipelines(
             'woa_time': np.nan,
             'hill_climbing_time': np.nan,
             'simulated_annealing_time': np.nan,
+            'aga_time': np.nan,
             'ga_speedup': np.nan,
             'pso_speedup': np.nan,
             'woa_speedup': np.nan,
             'hill_climbing_speedup': np.nan,
             'simulated_annealing_speedup': np.nan,
+            'aga_speedup': np.nan,
             'seq_accuracy': np.nan,
             'ga_accuracy': np.nan,
             'pso_accuracy': np.nan,
             'woa_accuracy': np.nan,
             'hill_climbing_accuracy': np.nan,
-            'simulated_annealing_accuracy': np.nan
+            'simulated_annealing_accuracy': np.nan,
+            'aga_accuracy': np.nan,
         }
         
         # ====================================================================
@@ -310,6 +316,41 @@ def compare_pipelines(
             continue
         
         # ====================================================================
+        # EXPERIMENTO 7: AGA-PARALELO
+        # ====================================================================
+        print("\n" + "-" * 80)
+        print("[AGA-PARALELO] Iniciando...")
+        print("-" * 80)
+        
+        try:
+            train_now = train_models and (size == sizes[-1])
+            _, aga_total_time, aga_stats = vectorize_with_ga_adaptive_load_balancing(
+                df_subset,
+                config=aga_config,
+                verbose=verbose,
+                train_model=train_now
+            )
+            experiment_result['aga_time'] = aga_total_time
+            if train_now and 'mlp_stats' in aga_stats:
+                experiment_result['aga_accuracy'] = aga_stats['mlp_stats']['accuracy']
+            print(f"✓ [AGA-PARALELO] Completado en {aga_total_time:.2f}s")
+            
+            # Mostrar info de subtareas si está disponible
+            if verbose and 'num_subtasks' in aga_stats:
+                print(f"  - Tareas: {aga_stats.get('num_tasks', 'N/A')}")
+                print(f"  - Subtareas: {aga_stats['num_subtasks']} "
+                      f"({aga_stats.get('subtasks_per_task', 'N/A')} por tarea)")
+                print(f"  - Tiempo GA: {aga_stats.get('ga_time', 0):.2f}s "
+                      f"({aga_stats.get('ga_time', 0)/aga_total_time*100:.1f}%)")
+                print(f"  - Tiempo vectorización: {aga_stats.get('vectorization_time', 0):.2f}s "
+                      f"({aga_stats.get('vectorization_time', 0)/aga_total_time*100:.1f}%)")
+        except Exception as e:
+            print(f"✗ [AGA-PARALELO] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+        
+        # ====================================================================
         # CALCULAR MÉTRICAS
         # ====================================================================
         print("\n" + "-" * 80)
@@ -322,6 +363,7 @@ def compare_pipelines(
         woa_time = experiment_result['woa_time']
         hill_climbing_time = experiment_result['hill_climbing_time']
         simulated_annealing_time = experiment_result['simulated_annealing_time']
+        aga_time = experiment_result['aga_time']
         
         if not np.isnan(ga_time) and not np.isnan(seq_time) and seq_time > 0:
             ga_speedup = seq_time / ga_time
@@ -344,13 +386,27 @@ def compare_pipelines(
         else:
             print("  WOA Speedup: N/A")
             
+        if not np.isnan(hill_climbing_time) and not np.isnan(seq_time) and seq_time > 0:
+            hill_climbing_speedup = seq_time / hill_climbing_time
+            experiment_result['hill_climbing_speedup'] = hill_climbing_speedup
+            print(f"  Hill Climbing Speedup: {hill_climbing_speedup:.2f}x")
+        else:
+            print("  Hill Climbing Speedup: N/A")
+            
         if not np.isnan(simulated_annealing_time) and not np.isnan(seq_time) and seq_time > 0:
             simulated_annealing_speedup = seq_time /  simulated_annealing_time
             experiment_result['simulated_annealing_speedup'] =  simulated_annealing_speedup
             print(f"  SIMULATED ANNEALING Speedup: { simulated_annealing_speedup:.2f}x")
         else:
             print("  SIMULATED ANNEALING Speedup: N/A")
-            
+        
+        if not np.isnan(aga_time) and not np.isnan(seq_time) and seq_time > 0:
+            aga_speedup = seq_time / aga_time
+            experiment_result['aga_speedup'] = aga_speedup
+            print(f"  AGA Speedup: {aga_speedup:.2f}x")
+        else:
+            print("  AGA Speedup: N/A")
+        
         results.append(experiment_result)
         
         print("\n" + "-" * 80)
@@ -361,7 +417,9 @@ def compare_pipelines(
         print(f"  GA-Paralelo: {ga_time:.2f}s (speedup: {experiment_result['ga_speedup']:.2f}x)")
         print(f"  PSO-Paralelo: {pso_time:.2f}s (speedup: {experiment_result['pso_speedup']:.2f}x)")
         print(f"  WOA-Paralelo: {woa_time:.2f}s (speedup: {experiment_result['woa_speedup']:.2f}x)")
+        print(f"  Hill Climbing-Paralelo: {hill_climbing_time:.2f}s (speedup: {experiment_result['hill_climbing_speedup']:.2f}x)")
         print(f"  SIMULATED ANNEALING-Paralelo: {simulated_annealing_time:.2f}s (speedup: {experiment_result['simulated_annealing_speedup']:.2f}x)")
+        print(f"  AGA-Paralelo: {aga_time:.2f}s (speedup: {experiment_result['aga_speedup']:.2f}x)")
     
     # ========================================================================
     # GENERAR DATAFRAME
@@ -372,8 +430,8 @@ def compare_pipelines(
     
     df_results = pd.DataFrame(results)
     
-    column_order = ['size', 'seq_time', 'ga_time', 'pso_time','woa_time','hill_climbing_time','simulated_annealing_time',
-                   'ga_speedup', 'pso_speedup','woa_speedup','hill_climbing_speedup','simulated_annealing_speedup']
+    column_order = ['size', 'seq_time', 'ga_time', 'pso_time','woa_time','hill_climbing_time','simulated_annealing_time','aga_time'
+                   'ga_speedup', 'pso_speedup','woa_speedup','hill_climbing_speedup','simulated_annealing_speedup','aga_speedup']
     column_order = [col for col in column_order if col in df_results.columns]
     df_results = df_results[column_order]
     
@@ -404,26 +462,30 @@ def compare_pipelines(
     plt.plot(df_results['size'], df_results['seq_time'],
             marker='o', linewidth=2, markersize=8,
             label='Secuencial (Baseline)', color='#e74c3c')
-    
+    # Geneticos
     plt.plot(df_results['size'], df_results['ga_time'],
             marker='s', linewidth=2, markersize=8,
-            label='GA-Paralelo', color='#3498db')
+            label='GA-Paralelo', color="#f5b20b")
     
+    plt.plot(df_results['size'], df_results['ga_time'],
+        marker='H', linewidth=2, markersize=8,
+        label='AGA-Paralelo', color="#d5f041")
+    # Bio inspirados
     plt.plot(df_results['size'], df_results['pso_time'],
             marker='^', linewidth=2, markersize=8,
-            label='PSO-Paralelo', color='#2ecc71')
+            label='PSO-Paralelo', color="#06fc2b")
     
     plt.plot(df_results['size'], df_results['woa_time'],
             marker='X', linewidth=2, markersize=8,
-            label='WOA-Paralelo', color="#fc4eab")
-    
+            label='WOA-Paralelo', color="#028206")
+    # Local search
     plt.plot(df_results['size'], df_results['hill_climbing_time'],
             marker='*', linewidth=2, markersize=8,
-            label='HILL CLIMBING-Paralelo', color="#75ffed")
+            label='HILL CLIMBING-Paralelo', color="#05a1fb")
     
     plt.plot(df_results['size'], df_results['simulated_annealing_time'],
             marker='D', linewidth=2, markersize=8,
-            label='SIMULATED ANNEALING-Paralelo', color="#3f1fc0")
+            label='SIMULATED ANNEALING-Paralelo', color="#200394")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Tiempo de Ejecución (segundos)', fontsize=12)
@@ -455,29 +517,34 @@ def compare_pipelines(
     plt.axhline(y=1, color='black', linestyle='-',
                linewidth=1, alpha=0.5, label='Sin mejora (1x)')
     
-    plt.plot(df_results['size'], df_results['ga_speedup'],
+    # Geneticos
+    plt.plot(df_results['size'], df_results['ga_time'],
             marker='s', linewidth=2, markersize=8,
-            label='GA-Paralelo', color='#3498db')
+            label='GA-Paralelo', color="#f5b20b")
     
-    plt.plot(df_results['size'], df_results['pso_speedup'],
+    plt.plot(df_results['size'], df_results['ga_time'],
+        marker='H', linewidth=2, markersize=8,
+        label='AGA-Paralelo', color="#d5f041")
+    # Bio inspirados
+    plt.plot(df_results['size'], df_results['pso_time'],
             marker='^', linewidth=2, markersize=8,
-            label='PSO-Paralelo', color='#2ecc71')
+            label='PSO-Paralelo', color="#06fc2b")
     
-    plt.plot(df_results['size'], df_results['woa_speedup'],
-            marker='x', linewidth=2, markersize=8,
-            label='WOA-Paralelo', color='#fc4eab')
-    
-    plt.plot(df_results['size'], df_results['hill_climbing_speedup'],
+    plt.plot(df_results['size'], df_results['woa_time'],
+            marker='X', linewidth=2, markersize=8,
+            label='WOA-Paralelo', color="#028206")
+    # Local search
+    plt.plot(df_results['size'], df_results['hill_climbing_time'],
             marker='*', linewidth=2, markersize=8,
-            label='Hill Climbing-Paralelo', color='#75ffed')
+            label='HILL CLIMBING-Paralelo', color="#05a1fb")
     
     plt.plot(df_results['size'], df_results['simulated_annealing_time'],
             marker='D', linewidth=2, markersize=8,
-            label='SIMULATED ANNEALING-Paralelo', color="#3f1fc0")
+            label='SIMULATED ANNEALING-Paralelo', color="#200394")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Speedup (veces más rápido que secuencial)', fontsize=12)
-    plt.title('Speedup Comparativo: GA, PSO, WOA, Hill Climbing',
+    plt.title('Speedup Comparativo: GA, AGA, PSO, WOA, Hill Climbing, Simulated Annealing',
              fontsize=14, fontweight='bold')
     plt.legend(fontsize=11, loc='upper left')
     plt.grid(True, alpha=0.3, linestyle='--')
@@ -551,6 +618,7 @@ if __name__ == '__main__':
             output_png='comparison_times.png',
             output_speedup_png='comparison_speedup.png',
             ga_config=GA_CONFIG,
+            aga_config=GA_CONFIG_ADAPTIVE,
             pso_config=PSO_CONFIG,
             woa_config=WOA_CONFIG,
             hill_climbing_config=HILL_CLIMBING_CONFIG,

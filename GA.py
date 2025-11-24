@@ -35,8 +35,8 @@ STOP_WORDS = {"the", "and", "is", "in", "at", "of", "a", "to", "for", "on",
 AVAILABLE_CORES = cpu_count()
 
 GA_CONFIG = {
-    'population_size': 30,
-    'num_generations': 10,
+    'population_size': 20,
+    'num_generations': 5,
     'heavy_multiplier': 1.2,
     'light_multiplier': 0.8,
     'mutation_rate': 0.15,
