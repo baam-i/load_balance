@@ -21,9 +21,11 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker
 
 # Importar pipelines
-from GA import vectorize_with_ga_load_balancing, GA_CONFIG
 from secuencial import sequential_vectorize
 from PSO import vectorize_with_pso_load_balancing, PSO_CONFIG
+from GA import vectorize_with_ga_load_balancing, GA_CONFIG
+from WOA import vectorize_with_woa_load_balancing, WOA_CONFIG
+from HILL_CLIMBING import vectorize_with_hill_climbing, HILL_CLIMBING_CONFIG
 
 # ============================================================================
 # FUNCIÓN PRINCIPAL DE COMPARACIÓN
@@ -35,8 +37,13 @@ def compare_pipelines(
     output_csv: str = "comparison_times.csv",
     output_png: str = "comparison_times.png",
     output_speedup_png: str = "comparison_speedup.png",
+    # geneticos
     ga_config: Dict[str, Any] = GA_CONFIG,
+    # bio inspirados
     pso_config: Dict[str, Any] = PSO_CONFIG,
+    woa_config: Dict[str, Any] = WOA_CONFIG,
+    # local search
+    hill_climbing_config: Dict[str, Any] = HILL_CLIMBING_CONFIG,
     verbose: bool = False,
     train_models: bool = False
 ) -> pd.DataFrame:
@@ -68,6 +75,8 @@ def compare_pipelines(
     print("  1. Secuencial (baseline)")
     print("  2. GA-Paralelo (Genetic Algorithm)")
     print("  3. PSO-Paralelo (Particle Swarm Optimization)")
+    print("  4. WOA-Paralelo (Whale Optimization Algorithm)")
+    print("  5. Hill Climbing-Paralelo")
 
     
     if verbose:
@@ -116,11 +125,17 @@ def compare_pipelines(
             'seq_time': np.nan,
             'ga_time': np.nan,
             'pso_time': np.nan,
+            'woa_time': np.nan,
+            'hill_climbing_time': np.nan,
             'ga_speedup': np.nan,
             'pso_speedup': np.nan,
+            'woa_speedup': np.nan,
+            'hill_climbing_speedup': np.nan,
             'seq_accuracy': np.nan,
             'ga_accuracy': np.nan,
-            'pso_accuracy': np.nan
+            'pso_accuracy': np.nan,
+            'woa_accuracy': np.nan,
+            'hill_climbing_accuracy': np.nan
         }
         
         # ====================================================================
@@ -210,6 +225,60 @@ def compare_pipelines(
             continue
         
         # ====================================================================
+        # EXPERIMENTO 4: WOA-PARALELO
+        # ====================================================================
+        print("\n" + "-" * 80)
+        print("[WOA-PARALELO] Iniciando...")
+        print("-" * 80)
+        
+        try:
+            train_now = train_models and (size == sizes[-1])
+            
+            _, woa_total_time, woa_stats = vectorize_with_woa_load_balancing(
+                df_subset,
+                config=woa_config,
+                verbose=verbose,
+                train_model=train_now
+            )
+            experiment_result['woa_time'] = woa_total_time
+            if train_now and 'mlp_stats' in woa_stats:
+                experiment_result['pso_accuracy'] = woa_stats['mlp_stats']['accuracy']
+                
+            print(f"✓ [WOA-PARALELO] Completado en {woa_total_time:.2f}s")
+        except Exception as e:
+            print(f"✗ [WOA-PARALELO] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+        
+        # ====================================================================
+        # EXPERIMENTO 5: Hill Climbing-PARALELO
+        # ====================================================================
+        print("\n" + "-" * 80)
+        print("[HILL CLIMBING-PARALELO] Iniciando...")
+        print("-" * 80)
+        
+        try:
+            train_now = train_models and (size == sizes[-1])
+            
+            _, hill_climbing_total_time, hill_climbing_stats = vectorize_with_hill_climbing(
+                df_subset,
+                config=hill_climbing_config,
+                verbose=verbose,
+                train_model=train_now
+            )
+            experiment_result['hill_climbing_time'] = hill_climbing_total_time
+            if train_now and 'mlp_stats' in hill_climbing_stats:
+                experiment_result['hill_climbing_accuracy'] = hill_climbing_stats['mlp_stats']['accuracy']
+                
+            print(f"✓ [HILL CLIMBING-PARALELO] Completado en {hill_climbing_total_time:.2f}s")
+        except Exception as e:
+            print(f"✗ [HILL CLIMBING-PARALELO] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+        
+        # ====================================================================
         # CALCULAR MÉTRICAS
         # ====================================================================
         print("\n" + "-" * 80)
@@ -219,6 +288,8 @@ def compare_pipelines(
         seq_time = experiment_result['seq_time']
         ga_time = experiment_result['ga_time']
         pso_time = experiment_result['pso_time']
+        woa_time = experiment_result['woa_time']
+        hill_climbing_time = experiment_result['hill_climbing_time']
         
         if not np.isnan(ga_time) and not np.isnan(seq_time) and seq_time > 0:
             ga_speedup = seq_time / ga_time
@@ -233,19 +304,21 @@ def compare_pipelines(
             print(f"  PSO Speedup: {pso_speedup:.2f}x")
         else:
             print("  PSO Speedup: N/A")
-        
-        if (not np.isnan(ga_time) and not np.isnan(pso_time) and
-            ga_time > 0 and pso_time > 0):
             
-            if ga_time < pso_time:
-                faster_method = "GA"
-                improvement = ((pso_time - ga_time) / pso_time) * 100
-            else:
-                faster_method = "PSO"
-                improvement = ((ga_time - pso_time) / ga_time) * 100
+        if not np.isnan(woa_time) and not np.isnan(seq_time) and seq_time > 0:
+            woa_speedup = seq_time / woa_time
+            experiment_result['woa_speedup'] = woa_speedup
+            print(f"  WOA Speedup: {woa_speedup:.2f}x")
+        else:
+            print("  WOA Speedup: N/A")
             
-            print(f"\n  {faster_method} es {improvement:.1f}% más rápido")
-        
+        if not np.isnan(hill_climbing_time) and not np.isnan(seq_time) and seq_time > 0:
+            hill_climbing_speedup = seq_time /  hill_climbing_time
+            experiment_result['hill_climbing_speedup'] =  hill_climbing_speedup
+            print(f"  HILL CLIMBING Speedup: { hill_climbing_speedup:.2f}x")
+        else:
+            print("  HILL CLIMBING Speedup: N/A")
+            
         results.append(experiment_result)
         
         print("\n" + "-" * 80)
@@ -255,6 +328,8 @@ def compare_pipelines(
         print(f"  Secuencial: {seq_time:.2f}s")
         print(f"  GA-Paralelo: {ga_time:.2f}s (speedup: {experiment_result['ga_speedup']:.2f}x)")
         print(f"  PSO-Paralelo: {pso_time:.2f}s (speedup: {experiment_result['pso_speedup']:.2f}x)")
+        print(f"  WOA-Paralelo: {woa_time:.2f}s (speedup: {experiment_result['woa_speedup']:.2f}x)")
+        print(f"  HILL CLIMBING-Paralelo: {hill_climbing_time:.2f}s (speedup: {experiment_result['hill_climbing_speedup']:.2f}x)")
     
     # ========================================================================
     # GENERAR DATAFRAME
@@ -265,8 +340,8 @@ def compare_pipelines(
     
     df_results = pd.DataFrame(results)
     
-    column_order = ['size', 'seq_time', 'ga_time', 'pso_time',
-                   'ga_speedup', 'pso_speedup']
+    column_order = ['size', 'seq_time', 'ga_time', 'pso_time','woa_time','hill_climbing_time',
+                   'ga_speedup', 'pso_speedup','woa_speedup','hill_climbing_speedup']
     column_order = [col for col in column_order if col in df_results.columns]
     df_results = df_results[column_order]
     
@@ -306,9 +381,17 @@ def compare_pipelines(
             marker='^', linewidth=2, markersize=8,
             label='PSO-Paralelo', color='#2ecc71')
     
+    plt.plot(df_results['size'], df_results['woa_time'],
+            marker='x', linewidth=2, markersize=8,
+            label='WOA-Paralelo', color="#fc4eab")
+    
+    plt.plot(df_results['size'], df_results['hill_climbing_time'],
+            marker='*', linewidth=2, markersize=8,
+            label='WOA-Paralelo', color="#75ffed")
+    
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Tiempo de Ejecución (segundos)', fontsize=12)
-    plt.title('Comparación de Tiempos: Secuencial vs GA vs PSO',
+    plt.title('Comparación de Tiempos: Secuencial, GA, PSO, WOA, Hill Climbing ',
              fontsize=14, fontweight='bold')
     plt.legend(fontsize=11, loc='upper left')
     plt.grid(True, alpha=0.3, linestyle='--')
@@ -344,9 +427,17 @@ def compare_pipelines(
             marker='^', linewidth=2, markersize=8,
             label='PSO-Paralelo', color='#2ecc71')
     
+    plt.plot(df_results['size'], df_results['woa_speedup'],
+            marker='x', linewidth=2, markersize=8,
+            label='WOA-Paralelo', color='#fc4eab')
+    
+    plt.plot(df_results['size'], df_results['hill_climbing_speedup'],
+            marker='*', linewidth=2, markersize=8,
+            label='Hill Climbing-Paralelo', color='#75ffed')
+    
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Speedup (veces más rápido que secuencial)', fontsize=12)
-    plt.title('Speedup Comparativo: GA vs PSO',
+    plt.title('Speedup Comparativo: GA, PSO, WOA, Hill Climbing',
              fontsize=14, fontweight='bold')
     plt.legend(fontsize=11, loc='upper left')
     plt.grid(True, alpha=0.3, linestyle='--')
@@ -387,15 +478,6 @@ if __name__ == '__main__':
     DATA_FILE = 'Suicide_Detection.csv'
     SIZES = list(range(20_000, 200_001, 20_000))
     
-    # Configuraciones de test
-    GA_TEST_CONFIG = GA_CONFIG
-    PSO_TEST_CONFIG = PSO_CONFIG
-    # Por implementar
-    WOA_TEST_CONFIG = None
-    AG_TEST_CONFIG_2 = None
-    LOCAL_SEARCH_TEST_CONFIG = None
-    LOCAL_SEARCH_TEST_CONFIG_2 = None
-    
     # Verificar requisitos
     print("=" * 80)
     print("VERIFICACIÓN DE REQUISITOS")
@@ -428,8 +510,10 @@ if __name__ == '__main__':
             output_csv='comparison_times.csv',
             output_png='comparison_times.png',
             output_speedup_png='comparison_speedup.png',
-            ga_config=GA_TEST_CONFIG,
-            pso_config=PSO_TEST_CONFIG,
+            ga_config=GA_CONFIG,
+            pso_config=PSO_CONFIG,
+            woa_config=WOA_CONFIG,
+            hill_climbing_config=HILL_CLIMBING_CONFIG,
             verbose=VERBOSE_MODE,
             train_models=TRAIN_MODELS
         )

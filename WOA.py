@@ -1,11 +1,16 @@
 """
-PSO.py
+WOA.py
 
-Balanceo de Carga Dinámico Basado en Particle Swarm Optimization (PSO)
-======================================================================
+Balanceo de Carga Dinámico Basado en Whale Optimization Algorithm (WOA)
+========================================================================
 
 VERSIÓN MEJORADA: Enfoque en UTILIZACIÓN de cores con subtareas aleatorias
-Similar a GA.py, pero usando PSO como metaheurística de optimización.
+Similar a GA.py y PSO.py, pero usando WOA como metaheurística de optimización.
+
+El WOA se inspira en el comportamiento de caza de las ballenas jorobadas:
+1. Encircling prey: Las ballenas rodean a su presa
+2. Bubble-net attacking: Ataque en espiral con burbujas
+3. Search for prey: Búsqueda exploratoria de nuevas presas
 """
 
 import os, re, csv, time
@@ -32,13 +37,11 @@ STOP_WORDS = frozenset([
 
 AVAILABLE_CORES = cpu_count()
 
-PSO_CONFIG = {
-    'num_particles': 25,
-    'num_iterations': 60,
-    'w': 0.729,
-    'c1': 1.49445,
-    'c2': 1.49445,
-    'early_stop_iters': 15,
+WOA_CONFIG = {
+    'num_whales': 25,          # Tamaño de la población de ballenas
+    'num_iterations': 60,       # Número de iteraciones del algoritmo
+    'b': 1,                     # Constante para definir forma de espiral logarítmica
+    'early_stop_iters': 15,     # Iteraciones sin mejora para detener
     'num_cores': AVAILABLE_CORES
 }
 
@@ -210,7 +213,7 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     Muestra estadísticas de UTILIZACIÓN de cores
     """
     print("\n" + "="*80)
-    print("⚡ ANÁLISIS DE UTILIZACIÓN DE CORES (PSO)")
+    print("⚡ ANÁLISIS DE UTILIZACIÓN DE CORES (WOA)")
     print("="*80)
     
     # Calcular cargas finales por core
@@ -324,16 +327,16 @@ def print_utilization_stats(mapping: TaskMapping, tasks,
     print("="*80 + "\n")
 
 
-def track_pso_evolution(swarm_fitness: List[float], iteration: int, 
+def track_woa_evolution(whale_fitness: List[float], iteration: int, 
                        best_global_fitness: float):
-    """Muestra el progreso del PSO con énfasis en utilización"""
-    avg_fitness = sum(swarm_fitness) / len(swarm_fitness)
-    worst_fitness = min(swarm_fitness)
+    """Muestra el progreso del WOA con énfasis en utilización"""
+    avg_fitness = sum(whale_fitness) / len(whale_fitness)
+    worst_fitness = min(whale_fitness)
     
     # Crear barra de progreso
     progress = best_global_fitness
     bar_length = int(progress * 20)
-    bar = '█' * bar_length + '░' * (20 - bar_length)
+    bar = '#' * bar_length + '.' * (20 - bar_length)
     
     print(f"  Iter {iteration:2d}: "
           f"Best={best_global_fitness:.4f} "
@@ -342,34 +345,50 @@ def track_pso_evolution(swarm_fitness: List[float], iteration: int,
 
 
 # ============================================================================
-# PARTICLE SWARM OPTIMIZATION - ENFOCADO EN UTILIZACIÓN
+# WHALE OPTIMIZATION ALGORITHM - ENFOCADO EN UTILIZACIÓN
 # ============================================================================
 
-class PSOLoadBalancer:
+class WOALoadBalancer:
     """
-    PSO para Balanceo de Carga Dinámico
-    VERSIÓN MEJORADA: Maximiza utilización uniforme de cores
+    WOA para Balanceo de Carga Dinámico
+    VERSION MEJORADA: Maximiza utilización uniforme de cores
+    
+    El WOA simula el comportamiento de caza de las ballenas jorobadas:
+    
+    1. ENCIRCLING PREY (Rodear presa):
+       Las ballenas identifican la posición de la presa (mejor solución)
+       y rodean alrededor de ella. Se actualiza la posición usando:
+       D = |C * X*(t) - X(t)|
+       X(t+1) = X*(t) - A * D
+       
+    2. BUBBLE-NET ATTACKING (Ataque con red de burbujas):
+       Dos estrategias alternadas:
+       a) Shrinking encircling: A decrece de 2 a 0
+       b) Spiral updating: Movimiento en espiral hacia la presa
+          X(t+1) = D' * e^(bl) * cos(2*pi*l) + X*(t)
+       
+    3. SEARCH FOR PREY (Búsqueda de presa):
+       Cuando |A| >= 1, las ballenas exploran aleatoriamente
+       buscando mejores posiciones
     """
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.num_processors = config['num_cores']
-        self.num_particles = config['num_particles']
+        self.num_whales = config['num_whales']
         self.num_iterations = config['num_iterations']
-        self.w = config['w']
-        self.c1 = config['c1']
-        self.c2 = config['c2']
+        self.b = config['b']  # Constante para la forma de la espiral logarítmica
         self.early_stop_iters = config['early_stop_iters']
-        self.H = 1.2
-        self.L = 0.8
     
-    def initialize_swarm(self, num_tasks: int,
-                        processor_states: List[ProcessorState]) -> List[TaskMapping]:
+    def initialize_population(self, num_tasks: int,
+                             processor_states: List[ProcessorState]) -> List[TaskMapping]:
         """
-        Inicializa enjambre con estrategias conscientes de utilización
+        Inicializa población de ballenas con estrategias conscientes de utilización.
+        Cada ballena representa una posible asignación de tareas a procesadores.
         """
-        swarm = []
+        population = []
         
+        # Calcular cargas actuales y probabilidades inversas
         current_loads = [ps.total_load() for ps in processor_states]
         max_load = max(current_loads) if current_loads else 1.0
         
@@ -384,7 +403,7 @@ class PSOLoadBalancer:
         else:
             probabilities = [1.0 / self.num_processors] * self.num_processors
         
-        for i in range(self.num_particles):
+        for i in range(self.num_whales):
             mapping = TaskMapping(self.num_processors)
             
             if i == 0:
@@ -425,19 +444,23 @@ class PSOLoadBalancer:
                         processor = np.random.randint(0, self.num_processors)
                     mapping.assign_task(processor, task_idx)
             
-            swarm.append(mapping)
+            population.append(mapping)
         
-        return swarm
+        return population
     
     def calculate_fitness(self, mapping: TaskMapping, tasks,
                          processor_states: List[ProcessorState]) -> float:
         """
-        Calcula fitness enfocado en MAXIMIZAR UTILIZACIÓN UNIFORME
+        Calcula fitness enfocado en MAXIMIZAR UTILIZACIÓN UNIFORME.
+        
+        La función evalúa qué tan bien distribuidas están las tareas
+        considerando tanto la utilización individual de cada core
+        como la uniformidad global del sistema.
         """
         num_tasks = len(tasks)
         mapping.validate_and_fix(num_tasks)
 
-        # Calcular cargas finales
+        # Calcular cargas finales por procesador
         final_loads = []
         
         for proc_id in range(self.num_processors):
@@ -455,20 +478,23 @@ class PSOLoadBalancer:
         avg_load = sum(final_loads) / self.num_processors if self.num_processors > 0 else 0.0
         total_load = sum(final_loads)
 
-        # COMPONENTE 1: UTILIZACIÓN MÍNIMA (queremos que todos trabajen)
+        # COMPONENTE 1: UTILIZACIÓN MÍNIMA
+        # Asegura que ningún core esté ocioso
         if max_load > 0:
             min_utilization = min_load / max_load
         else:
             min_utilization = 0.0
 
-        # COMPONENTE 2: EFICIENCIA GLOBAL (uso del sistema)
+        # COMPONENTE 2: EFICIENCIA GLOBAL
+        # Mide qué tan cerca está el promedio del máximo
         ideal_load_per_core = total_load / self.num_processors
         if ideal_load_per_core > 0:
             efficiency = avg_load / max_load
         else:
             efficiency = 0.0
 
-        # COMPONENTE 3: UNIFORMIDAD (coeficiente de variación inverso)
+        # COMPONENTE 3: UNIFORMIDAD
+        # Penaliza variaciones grandes entre cores
         if avg_load > 0:
             std_dev = (sum((load - avg_load) ** 2 for load in final_loads) / self.num_processors) ** 0.5
             coef_variation = std_dev / avg_load
@@ -476,13 +502,13 @@ class PSOLoadBalancer:
         else:
             uniformity = 0.0
 
-        # COMPONENTE 4: THROUGHPUT POTENCIAL (inverso del makespan)
+        # COMPONENTE 4: THROUGHPUT POTENCIAL
         if max_load > 0:
             throughput_score = avg_load / max_load
         else:
             throughput_score = 0.0
 
-        # FITNESS FINAL: Enfocado en utilización
+        # FITNESS FINAL: Combinación ponderada
         fitness = (
             0.35 * min_utilization +
             0.25 * efficiency +
@@ -490,121 +516,179 @@ class PSOLoadBalancer:
             0.10 * throughput_score
         )
         
-        # Bonificación si TODOS los cores están bien utilizados
+        # Bonificación si mayoría de cores están bien utilizados
         cores_well_utilized = sum(1 for load in final_loads if load >= 0.8 * avg_load)
         if cores_well_utilized >= 0.85 * self.num_processors:
             fitness *= 1.2
         
-        # Penalización severa si algún core está muy subutilizado
+        # Penalización si algún core está muy subutilizado
         if min_utilization < 0.5:
             fitness *= 0.7
 
         return max(0.0, min(1.0, fitness))
     
+    def mapping_to_position(self, mapping: TaskMapping, num_tasks: int) -> np.ndarray:
+        """
+        Convierte un TaskMapping a un vector de posición continuo.
+        
+        Para WOA necesitamos representar las soluciones discretas (asignaciones)
+        como vectores continuos. Cada elemento del vector representa a qué
+        procesador está asignada cada tarea.
+        """
+        position = np.zeros(num_tasks, dtype=float)
+        for proc_id in range(self.num_processors):
+            for task_id in mapping.get_processor_tasks(proc_id):
+                if task_id < num_tasks:
+                    position[task_id] = float(proc_id)
+        return position
+    
+    def position_to_mapping(self, position: np.ndarray) -> TaskMapping:
+        """
+        Convierte un vector de posición continuo a TaskMapping.
+        
+        Redondea cada valor a un entero válido de procesador
+        y construye el mapeo correspondiente.
+        """
+        mapping = TaskMapping(self.num_processors)
+        for task_id, proc_float in enumerate(position):
+            proc_id = int(np.round(proc_float))
+            proc_id = max(0, min(proc_id, self.num_processors - 1))
+            mapping.assign_task(proc_id, task_id)
+        return mapping
+    
     def optimize(self, tasks,
                 processor_states: List[ProcessorState],
                 verbose: bool = False) -> TaskMapping:
         """
-        Optimización PSO principal con enfoque en utilización
+        Optimización WOA principal con enfoque en utilización.
+        
+        FASES DEL ALGORITMO:
+        
+        1. INICIALIZACIÓN:
+           - Crear población inicial de ballenas (soluciones)
+           - Evaluar fitness de cada ballena
+           - Identificar la mejor ballena (líder)
+        
+        2. ITERACIÓN PRINCIPAL:
+           Para cada ballena, decidir estrategia basada en parámetros:
+           
+           a) Si p < 0.5: BUBBLE-NET ATTACKING
+              - Si |A| < 1: Shrinking encircling (contraer cerco)
+                Acercarse a la mejor solución actual
+              - Si |A| >= 1: Spiral updating (movimiento espiral)
+                Moverse en espiral hacia la mejor solución
+           
+           b) Si p >= 0.5: SEARCH FOR PREY
+              Exploración aleatoria buscando nuevas regiones
+              
+        3. ACTUALIZACIÓN:
+           - Evaluar nuevas posiciones
+           - Actualizar mejor solución global
+           - Decrementar parámetro a linealmente de 2 a 0
         """
         num_tasks = len(tasks)
         
         if num_tasks == 0:
             return TaskMapping(self.num_processors)
         
-        # Inicializar enjambre con conocimiento de cargas actuales
-        swarm = self.initialize_swarm(num_tasks, processor_states)
+        # Inicializar población de ballenas
+        whales = self.initialize_population(num_tasks, processor_states)
         
-        # Velocidades (inicialmente cero)
-        velocities = [np.zeros(num_tasks, dtype=int) for _ in range(self.num_particles)]
+        # Convertir a posiciones continuas para operaciones matemáticas
+        positions = np.array([
+            self.mapping_to_position(whale, num_tasks) 
+            for whale in whales
+        ])
         
         # Evaluar fitness inicial
         fitness_values = [
             self.calculate_fitness(mapping, tasks, processor_states)
-            for mapping in swarm
+            for mapping in whales
         ]
         
-        # Mejores personales
-        personal_best = [mapping.copy() for mapping in swarm]
-        personal_best_fitness = fitness_values.copy()
-        
-        # Mejor global
+        # Identificar mejor ballena (líder del grupo)
         best_idx = int(np.argmax(fitness_values))
-        global_best = swarm[best_idx].copy()
-        global_best_fitness = fitness_values[best_idx]
+        best_position = positions[best_idx].copy()
+        best_fitness = fitness_values[best_idx]
         
         if verbose:
-            print(f"\n🐝 Evolución del PSO:")
-            track_pso_evolution(fitness_values, 0, global_best_fitness)
+            print(f"\nEvolucion del WOA:")
+            track_woa_evolution(fitness_values, 0, best_fitness)
         
         # Variables para early stopping
         no_improve_count = 0
         
-        # Ciclo PSO
+        # CICLO PRINCIPAL DE WOA
         for iteration in range(self.num_iterations):
-            # Actualizar cada partícula
-            for i in range(self.num_particles):
-                # Convertir mapeo a vector
-                position = np.zeros(num_tasks, dtype=int)
-                for proc_id in range(self.num_processors):
-                    for task_id in swarm[i].get_processor_tasks(proc_id):
-                        if task_id < num_tasks:
-                            position[task_id] = proc_id
-                
-                personal_vec = np.zeros(num_tasks, dtype=int)
-                for proc_id in range(self.num_processors):
-                    for task_id in personal_best[i].get_processor_tasks(proc_id):
-                        if task_id < num_tasks:
-                            personal_vec[task_id] = proc_id
-                
-                global_vec = np.zeros(num_tasks, dtype=int)
-                for proc_id in range(self.num_processors):
-                    for task_id in global_best.get_processor_tasks(proc_id):
-                        if task_id < num_tasks:
-                            global_vec[task_id] = proc_id
-                
-                # Actualizar velocidad
+            # Parámetro a decrece linealmente de 2 a 0
+            # Controla la transición entre exploración y explotación
+            a = 2.0 - iteration * (2.0 / self.num_iterations)
+            
+            # Actualizar cada ballena
+            for i in range(self.num_whales):
+                # Parámetros aleatorios para el movimiento
                 r1 = np.random.random()
                 r2 = np.random.random()
                 
-                cognitive = (personal_vec - position) * self.c1 * r1
-                social = (global_vec - position) * self.c2 * r2
+                # A: Coeficiente de oscilación, controla explotación vs exploración
+                A = 2.0 * a * r1 - a
                 
-                velocities[i] = (self.w * velocities[i] + 
-                                cognitive + social).astype(int)
+                # C: Coeficiente aleatorio, da énfasis aleatorio a la distancia
+                C = 2.0 * r2
                 
-                # Limitar velocidad
-                velocities[i] = np.clip(velocities[i], -2, 2)
+                # p: Probabilidad para elegir entre espiral o cerco
+                p = np.random.random()
                 
-                # Actualizar posición
-                new_position = position + velocities[i]
-                new_position = np.clip(new_position, 0, self.num_processors - 1)
+                # l: Parámetro para definir forma de espiral logarítmica
+                l = np.random.uniform(-1, 1)
                 
-                # Convertir vector a mapeo
-                new_mapping = TaskMapping(self.num_processors)
-                for task_id, proc_id in enumerate(new_position):
-                    new_mapping.assign_task(int(proc_id), task_id)
+                if p < 0.5:
+                    # ===== BUBBLE-NET ATTACKING =====
+                    if abs(A) < 1:
+                        # SHRINKING ENCIRCLING MECHANISM
+                        # Las ballenas contraen el cerco alrededor de la presa
+                        # Se acercan a la mejor solución actual
+                        D = abs(C * best_position - positions[i])
+                        positions[i] = best_position - A * D
+                    else:
+                        # SEARCH FOR PREY (exploración)
+                        # Seleccionar una ballena aleatoria como referencia
+                        rand_idx = np.random.randint(0, self.num_whales)
+                        X_rand = positions[rand_idx]
+                        D = abs(C * X_rand - positions[i])
+                        positions[i] = X_rand - A * D
+                else:
+                    # ===== SPIRAL UPDATING POSITION =====
+                    # Movimiento en espiral hacia la mejor solución
+                    # Simula el patrón de ataque helicoidal de las ballenas
+                    D_prime = abs(best_position - positions[i])
+                    
+                    # Ecuación espiral: X(t+1) = D' * e^(bl) * cos(2*pi*l) + X*(t)
+                    positions[i] = (
+                        D_prime * np.exp(self.b * l) * np.cos(2 * np.pi * l) + 
+                        best_position
+                    )
                 
-                swarm[i] = new_mapping
+                # Asegurar que las posiciones estén en rango válido [0, num_processors-1]
+                positions[i] = np.clip(
+                    positions[i], 
+                    0, 
+                    self.num_processors - 1
+                )
             
-            # Evaluar fitness
+            # Convertir posiciones a mapeos y evaluar
+            whales = [self.position_to_mapping(pos) for pos in positions]
             fitness_values = [
                 self.calculate_fitness(mapping, tasks, processor_states)
-                for mapping in swarm
+                for mapping in whales
             ]
             
-            # Actualizar mejores personales
-            for i in range(self.num_particles):
-                if fitness_values[i] > personal_best_fitness[i]:
-                    personal_best[i] = swarm[i].copy()
-                    personal_best_fitness[i] = fitness_values[i]
-            
-            # Actualizar mejor global
-            best_idx = int(np.argmax(fitness_values))
-            if fitness_values[best_idx] > global_best_fitness:
-                improvement = fitness_values[best_idx] - global_best_fitness
-                global_best = swarm[best_idx].copy()
-                global_best_fitness = fitness_values[best_idx]
+            # Actualizar mejor solución global
+            current_best_idx = int(np.argmax(fitness_values))
+            if fitness_values[current_best_idx] > best_fitness:
+                improvement = fitness_values[current_best_idx] - best_fitness
+                best_position = positions[current_best_idx].copy()
+                best_fitness = fitness_values[current_best_idx]
                 no_improve_count = 0
                 
                 if improvement < 1e-6:
@@ -613,33 +697,44 @@ class PSOLoadBalancer:
                 no_improve_count += 1
             
             if verbose:
-                track_pso_evolution(fitness_values, iteration + 1, global_best_fitness)
+                track_woa_evolution(fitness_values, iteration + 1, best_fitness)
             
-            # Early stopping
+            # Early stopping si no hay mejora
             if no_improve_count >= self.early_stop_iters:
                 if verbose:
-                    print(f"  Early stopping en iteración {iteration + 1}")
+                    print(f"  Early stopping en iteracion {iteration + 1}")
                 break
         
-        global_best.fitness_value = global_best_fitness
-        global_best.validate_and_fix(num_tasks)
+        # Construir mejor mapeo final
+        best_mapping = self.position_to_mapping(best_position)
+        best_mapping.fitness_value = best_fitness
+        best_mapping.validate_and_fix(num_tasks)
         
-        return global_best
+        return best_mapping
 
 
 # ============================================================================
 # FUNCIÓN PRINCIPAL DE VECTORIZACIÓN
 # ============================================================================
 
-def vectorize_with_pso_load_balancing(
+def vectorize_with_woa_load_balancing(
     df,
-    config: Dict[str, Any] = PSO_CONFIG,
+    config: Dict[str, Any] = WOA_CONFIG,
     verbose: bool = False,
     train_model: bool = False
 ) -> Tuple[Any, float, Dict[str, Any]]:
     """
-    Vectorización TF-IDF con balanceo de carga basado en PSO
-    VERSIÓN ENFOCADA EN UTILIZACIÓN DE CORES CON SUBTAREAS ALEATORIAS
+    Vectorización TF-IDF con balanceo de carga basado en WOA
+    VERSION ENFOCADA EN UTILIZACION DE CORES CON SUBTAREAS ALEATORIAS
+    
+    PROCESO:
+    1. Preparar datos y vocabulario TF-IDF
+    2. Dividir dataset en tareas principales
+    3. Subdividir cada tarea en subtareas de tamaño aleatorio
+    4. Procesar ventanas de subtareas usando WOA para balanceo
+    5. Vectorizar en paralelo según asignación WOA
+    6. Actualizar cargas acumulativas de procesadores
+    7. Repetir hasta procesar todas las subtareas
     """
     
     num_cores = config['num_cores']
@@ -663,7 +758,7 @@ def vectorize_with_pso_load_balancing(
     
     # Dividir dataset en tareas
     chunk_size = calculate_optimal_chunk_size(total_texts, num_cores)
-    print(f"  Chunk size óptimo: {chunk_size}")
+    print(f"  Chunk size optimo: {chunk_size}")
     
     tasks = []
     for i in range(0, total_texts, chunk_size):
@@ -684,7 +779,7 @@ def vectorize_with_pso_load_balancing(
     # Subdividir en subtareas
     num_subtasks_per_task = 4 * num_cores
     print(f"  Subtareas por tarea: {num_subtasks_per_task}")
-    print(f"\n  Creando subtareas con tamaños aleatorios...")
+    print(f"\n  Creando subtareas con tamanos aleatorios...")
     
     all_subtasks = []
     all_subtask_text_counts = []
@@ -700,25 +795,26 @@ def vectorize_with_pso_load_balancing(
             print(f"\n  Tarea {task_id} (ejemplo):")
             print(f"    Textos en tarea: {len(task.texts)}")
             print(f"    Subtareas creadas: {len(subtasks)}")
-            print(f"    Tamaños (textos): min={min(text_counts)}, "
+            print(f"    Tamanos (textos): min={min(text_counts)}, "
                   f"max={max(text_counts)}, "
                   f"avg={sum(text_counts)/len(text_counts):.1f}")
     
     num_subtasks_total = len(all_subtasks)
     print(f"\n  Total de subtareas: {num_subtasks_total}")
-    print(f"  Estadísticas de tamaños:")
+    print(f"  Estadisticas de tamanos:")
     print(f"    Min textos: {min(all_subtask_text_counts)}")
     print(f"    Max textos: {max(all_subtask_text_counts)}")
     print(f"    Promedio: {sum(all_subtask_text_counts)/len(all_subtask_text_counts):.1f}")
     
     # Inicializar estados de procesador
+    # Cada procesador inicia con carga cero
     processor_states = [
         ProcessorState(processor_id=i, current_load=0.0, queue=[])
         for i in range(num_cores)
     ]
     
-    # Inicializar PSO
-    pso = PSOLoadBalancer(config)
+    # Inicializar WOA
+    woa = WOALoadBalancer(config)
     
     # Estadísticas
     stats: Dict[str, Any] = {
@@ -726,11 +822,11 @@ def vectorize_with_pso_load_balancing(
         'num_tasks': num_tasks_total,
         'num_subtasks': num_subtasks_total,
         'num_cores': num_cores,
-        'pso_iterations': config['num_iterations'],
-        'pso_particles': config['num_particles'],
+        'woa_iterations': config['num_iterations'],
+        'woa_whales': config['num_whales'],
         'chunk_size': chunk_size,
         'subtasks_per_task': num_subtasks_per_task,
-        'pso_time': 0.0,
+        'woa_time': 0.0,
         'vectorization_time': 0.0,
         'total_time': 0.0
     }
@@ -741,6 +837,7 @@ def vectorize_with_pso_load_balancing(
     processed_subtasks = 0
     window_count = 0
     
+    # Procesar subtareas en ventanas
     window_size = num_subtasks_per_task * 2
     
     while processed_subtasks < num_subtasks_total:
@@ -757,18 +854,18 @@ def vectorize_with_pso_load_balancing(
             max_current = max(current_loads) if current_loads else 1.0
             if max_current > 0:
                 utilizations = [load / max_current * 100 for load in current_loads]
-                print(f"  📊 Utilización actual: "
+                print(f"  Utilizacion actual: "
                       f"min={min(utilizations):.1f}%, "
                       f"max={max(utilizations):.1f}%, "
                       f"avg={sum(utilizations)/len(utilizations):.1f}%")
         
-        # Ejecutar PSO
-        pso_start = time.time()
-        best_mapping = pso.optimize(window_subtasks, processor_states, verbose=verbose)
-        pso_time = time.time() - pso_start
-        stats['pso_time'] += pso_time
+        # Ejecutar WOA para encontrar mejor asignación
+        woa_start = time.time()
+        best_mapping = woa.optimize(window_subtasks, processor_states, verbose=verbose)
+        woa_time = time.time() - woa_start
+        stats['woa_time'] += woa_time
         
-        print(f"  (PSO: {pso_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", 
+        print(f"  (WOA: {woa_time:.2f}s, fitness: {best_mapping.fitness_value:.4f})", 
               end=" ")
         
         if verbose:
@@ -776,7 +873,7 @@ def vectorize_with_pso_load_balancing(
             print_utilization_stats(best_mapping, window_subtasks, 
                                    processor_states, num_cores, show_details=True)
         
-        # Ejecutar vectorización
+        # Ejecutar vectorización según asignación WOA
         vec_start = time.time()
         
         processor_work = [[] for _ in range(num_cores)]
@@ -814,9 +911,10 @@ def vectorize_with_pso_load_balancing(
         if not verbose:
             print(f"(Vec: {vec_time:.2f}s)")
         else:
-            print(f"\n  Vectorización completada en {vec_time:.2f}s")
+            print(f"\n  Vectorizacion completada en {vec_time:.2f}s")
         
-        # Actualizar cargas (NO resetear)
+        # Actualizar cargas acumulativas (NO resetear)
+        # Las cargas se mantienen para decisiones futuras
         for proc_id in range(num_cores):
             subtask_indices = best_mapping.get_processor_tasks(proc_id)
             added_load = sum(
@@ -832,7 +930,7 @@ def vectorize_with_pso_load_balancing(
             max_new = max(new_loads) if new_loads else 1.0
             if max_new > 0:
                 new_utilizations = [load / max_new * 100 for load in new_loads]
-                print(f"  📈 Utilización actualizada: "
+                print(f"  Utilizacion actualizada: "
                       f"min={min(new_utilizations):.1f}%, "
                       f"max={max(new_utilizations):.1f}%, "
                       f"avg={sum(new_utilizations)/len(new_utilizations):.1f}%")
@@ -853,15 +951,15 @@ def vectorize_with_pso_load_balancing(
     
     print(f"\n  Resumen de tiempos:")
     print(f"  - Total: {total_time:.2f}s")
-    print(f"  - PSO: {stats['pso_time']:.2f}s "
-          f"({stats['pso_time']/total_time*100:.1f}%)")
-    print(f"  - Vectorización: {stats['vectorization_time']:.2f}s "
+    print(f"  - WOA: {stats['woa_time']:.2f}s "
+          f"({stats['woa_time']/total_time*100:.1f}%)")
+    print(f"  - Vectorizacion: {stats['vectorization_time']:.2f}s "
           f"({stats['vectorization_time']/total_time*100:.1f}%)")
     
     # Emparejamiento con etiquetas
     if train_model and 'class' in df.columns:
         print(f"\n{'='*70}")
-        print(f"🔗 EMPAREJAMIENTO VECTOR-ETIQUETA")
+        print(f"EMPAREJAMIENTO VECTOR-ETIQUETA")
         print(f"{'='*70}")
         
         y_original = df['class'].values
@@ -879,12 +977,12 @@ def vectorize_with_pso_load_balancing(
                   f"{'SI' if X.shape[0] == y_aligned.shape[0] else 'NO'}")
         
         unique, counts = np.unique(y_aligned, return_counts=True)
-        print(f"\n  📊 Distribución de clases:")
+        print(f"\n  Distribucion de clases:")
         for label, count in zip(unique, counts):
             print(f"     Clase {label}: {count} "
                   f"({count/len(y_aligned)*100:.1f}%)")
         
-        print(f"\n  🔍 Verificando primeras 5 muestras:")
+        print(f"\n  Verificando primeras 5 muestras:")
         for i in range(min(5, len(indexed_vectors))):
             original_idx, _ = indexed_vectors[i]
             text_preview = (texts[original_idx][:50] + "..." 
@@ -897,7 +995,7 @@ def vectorize_with_pso_load_balancing(
         print(f"{'='*70}\n")
         
         mlp_stats = train_and_evaluate_mlp(X, y_aligned, 
-                                          method_name="PSO-Paralelo")
+                                          method_name="WOA-Paralelo")
         stats['mlp_stats'] = mlp_stats
     
     return X, total_time, stats
@@ -907,10 +1005,10 @@ def vectorize_with_pso_load_balancing(
 # ENTRENAMIENTO Y EVALUACIÓN DE MODELO
 # ============================================================================
 
-def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]:
+def train_and_evaluate_mlp(X, y, method_name: str = "Metodo") -> Dict[str, Any]:
     """Entrena un MLPClassifier y muestra matriz de confusión"""
     print(f"\n{'='*70}")
-    print(f"🧠 ENTRENAMIENTO DE RED NEURONAL MLP ({method_name})")
+    print(f"ENTRENAMIENTO DE RED NEURONAL MLP ({method_name})")
     print(f"{'='*70}")
     
     print("  Dividiendo datos (80% train, 20% test)...")
@@ -934,26 +1032,26 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     mlp.fit(X_train, y_train)
     mlp_time = time.time() - mlp_start
     
-    print(f"  ✓ Entrenamiento completado en {mlp_time:.2f}s")
+    print(f"  Entrenamiento completado en {mlp_time:.2f}s")
     
     print("\n  Realizando predicciones...")
     y_pred = mlp.predict(X_test)
     
     accuracy = accuracy_score(y_test, y_pred)
     
-    print(f"\n📊 RESULTADOS:")
+    print(f"\nRESULTADOS:")
     print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
     
     cm = confusion_matrix(y_test, y_pred)
     
-    print(f"\n  Matriz de Confusión:")
+    print(f"\n  Matriz de Confusion:")
     print(f"  {cm}")
     
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                 xticklabels=['No Suicida', 'Suicida'],
                 yticklabels=['No Suicida', 'Suicida'])
-    plt.title(f'Matriz de Confusión - {method_name}')
+    plt.title(f'Matriz de Confusion - {method_name}')
     plt.ylabel('Verdadero')
     plt.xlabel('Predicho')
     plt.tight_layout()
@@ -962,9 +1060,9 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"\n  ✓ Matriz de confusión guardada: {filename}")
+    print(f"\n  Matriz de confusion guardada: {filename}")
     
-    print(f"\n  Reporte de Clasificación:")
+    print(f"\n  Reporte de Clasificacion:")
     report = classification_report(y_test, y_pred, 
                                    target_names=['No Suicida', 'Suicida'])
     print(report)
@@ -985,47 +1083,47 @@ def train_and_evaluate_mlp(X, y, method_name: str = "Método") -> Dict[str, Any]
 # ============================================================================
 
 if __name__ == "__main__":
-    """Pruebas del módulo PSO con enfoque en utilización"""
+    """Pruebas del módulo WOA con enfoque en utilización"""
     print("="*70)
-    print("🐝 PSO LOAD BALANCER - ENFOQUE EN UTILIZACIÓN DE CORES")
+    print("WOA LOAD BALANCER - ENFOQUE EN UTILIZACION DE CORES")
     print("="*70)
     print(f"Cores disponibles: {AVAILABLE_CORES}")
     
-    print("\n📂 Cargando datos...")
+    print("\nCargando datos...")
     df_test = pd.read_csv('Suicide_Detection.csv').head(20000)
     print(f"   Dataset: {len(df_test)} textos")
     
     if 'class' in df_test.columns:
         class_dist = df_test['class'].value_counts()
-        print(f"\n📊 Distribución de clases:")
+        print(f"\nDistribucion de clases:")
         for label, count in class_dist.items():
             print(f"   Clase {label}: {count} ({count/len(df_test)*100:.1f}%)")
     
     print("\n" + "="*70)
-    print("🚀 INICIANDO VECTORIZACIÓN CON PSO")
+    print("INICIANDO VECTORIZACION CON WOA")
     print("="*70)
     
-    X, tiempo, stats = vectorize_with_pso_load_balancing(
+    X, tiempo, stats = vectorize_with_woa_load_balancing(
         df_test,
-        config=PSO_CONFIG,
+        config=WOA_CONFIG,
         verbose=True,
         train_model=True
     )
     
     print("\n" + "="*70)
-    print("✅ RESULTADO FINAL")
+    print("RESULTADO FINAL")
     print("="*70)
     print(f"  Textos procesados:      {X.shape[0]:,}")
     print(f"  Dimensiones del vector: {X.shape[1]:,}")
     print(f"  Tiempo total:           {tiempo:.2f}s")
-    print(f"  Tiempo PSO:             {stats['pso_time']:.2f}s")
-    print(f"  Tiempo vectorización:   {stats['vectorization_time']:.2f}s")
+    print(f"  Tiempo WOA:             {stats['woa_time']:.2f}s")
+    print(f"  Tiempo vectorizacion:   {stats['vectorization_time']:.2f}s")
     print(f"  Cores utilizados:       {stats['num_cores']}")
     print(f"  Tareas creadas:         {stats['num_tasks']}")
     print(f"  Subtareas creadas:      {stats['num_subtasks']}")
     
     if 'mlp_stats' in stats:
-        print(f"\n🧠 RESULTADOS DEL MODELO:")
+        print(f"\nRESULTADOS DEL MODELO:")
         print(f"  Accuracy:               {stats['mlp_stats']['accuracy']:.4f}")
         print(f"  Tiempo entrenamiento:   "
               f"{stats['mlp_stats']['train_time']:.2f}s")
