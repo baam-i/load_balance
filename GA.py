@@ -619,7 +619,7 @@ def vectorize_with_ga_load_balancing(
     
     # Inicializar estados de procesador
     processor_states = [
-        ProcessorState(processor_id=i, current_load=0.0, queue=[])
+        ProcessorState(processor_id=i, current_load=0.0)
         for i in range(num_cores)
     ]
     

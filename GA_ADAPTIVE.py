@@ -805,7 +805,7 @@ def vectorize_with_ga_adaptive_load_balancing(
     print(f"\n  Total de subtareas: {num_subtasks_total}")
     
     processor_states = [
-        ProcessorState(processor_id=i, current_load=0.0, queue=[])
+        ProcessorState(processor_id=i, current_load=0.0)
         for i in range(num_cores)
     ]
     

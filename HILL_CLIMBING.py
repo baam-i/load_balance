@@ -681,7 +681,7 @@ def vectorize_with_hill_climbing(
     
     # Inicializar estados de procesador (comienzan con carga cero)
     processor_states = [
-        ProcessorState(processor_id=i, current_load=0.0, queue=[])
+        ProcessorState(processor_id=i, current_load=0.0)
         for i in range(num_cores)
     ]
     

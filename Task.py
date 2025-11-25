@@ -37,11 +37,10 @@ class ProcessorState:
     """Estado actual de un procesador en el sistema"""
     processor_id: int
     current_load: float
-    queue: List[Task]
 
     def total_load(self) -> float:
         """Calcula la carga total del procesador"""
-        return self.current_load + sum(t.size for t in self.queue)
+        return self.current_load
 
 
 @dataclass

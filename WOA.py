@@ -36,8 +36,8 @@ from Task import *
 AVAILABLE_CORES = cpu_count()
 
 WOA_CONFIG = {
-    'num_whales': 25,          # Tamaño de la población de ballenas
-    'num_iterations': 60,       # Número de iteraciones del algoritmo
+    'num_whales': 20,          # Tamaño de la población de ballenas
+    'num_iterations': 30,       # Número de iteraciones del algoritmo
     'b': 1,                     # Constante para definir forma de espiral logarítmica
     'early_stop_iters': 15,     # Iteraciones sin mejora para detener
     'num_cores': AVAILABLE_CORES
@@ -655,7 +655,7 @@ def vectorize_with_woa_load_balancing(
     # Inicializar estados de procesador
     # Cada procesador inicia con carga cero
     processor_states = [
-        ProcessorState(processor_id=i, current_load=0.0, queue=[])
+        ProcessorState(processor_id=i, current_load=0.0)
         for i in range(num_cores)
     ]
     
