@@ -1,0 +1,2 @@
+size,GA (ms),AGA (ms),PSO (ms),WOA (ms),Hill Climbing (ms),Simulated Annealing (ms)
+200000,38.47,2193.92,68.09,205.92,162.94,19.10

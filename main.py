@@ -31,6 +31,300 @@ from HILL_CLIMBING import vectorize_with_hill_climbing, HILL_CLIMBING_CONFIG
 from SA import vectorize_with_simulated_annealing, SIMULATED_ANNEALING_CONFIG
 
 # ============================================================================
+# FUNCIONES AUXILIARES PARA TRACKING DE METAHEURÍSTICAS
+# ============================================================================
+
+def extract_metaheuristic_time(stats: Dict[str, Any], algorithm_name: str) -> float:
+    """
+    Extrae el tiempo de ejecución del algoritmo metaheurístico sin vectorización
+    
+    Args:
+        stats: Diccionario de estadísticas del algoritmo
+        algorithm_name: Nombre del algoritmo (ga, pso, woa, hill_climbing, simulated_annealing)
+    
+    Returns:
+        Tiempo en segundos del algoritmo metaheurístico
+    """
+    time_key_mapping = {
+        'ga': 'ga_time',
+        'pso': 'pso_time',
+        'woa': 'woa_time',
+        'hill_climbing': 'hc_time',
+        'simulated_annealing': 'sa_time',
+        'aga': 'aga_time'
+    }
+    
+    key = time_key_mapping.get(algorithm_name.lower(), f'{algorithm_name}_time')
+    
+    return stats.get(key, 0.0)
+
+
+def save_metaheuristic_times_to_csv(
+    df_results: pd.DataFrame,
+    output_csv: str = "metaheuristic_times.csv"
+) -> None:
+    """
+    Guarda los tiempos de metaheurísticas en un archivo CSV separado
+    
+    Args:
+        df_results: DataFrame con los resultados
+        output_csv: Ruta del archivo CSV de salida
+    """
+    print(f"  Guardando tiempos de metaheurísticas en {output_csv}...")
+    
+    metaheuristic_data = {
+        'size': df_results['size']
+    }
+    
+    algorithms = [
+        ('ga_metaheuristic_time', 'GA (ms)'),
+        ('aga_metaheuristic_time', 'AGA (ms)'),
+        ('pso_metaheuristic_time', 'PSO (ms)'),
+        ('woa_metaheuristic_time', 'WOA (ms)'),
+        ('hill_climbing_metaheuristic_time', 'Hill Climbing (ms)'),
+        ('simulated_annealing_metaheuristic_time', 'Simulated Annealing (ms)')
+    ]
+    
+    for col, label in algorithms:
+        if col in df_results.columns:
+            # Convertir a milisegundos
+            metaheuristic_data[label] = (df_results[col] * 1000).round(2)
+    
+    df_metaheuristic = pd.DataFrame(metaheuristic_data)
+    df_metaheuristic.to_csv(output_csv, index=False, float_format='%.2f')
+    print(f"  ✓ Tabla de metaheurísticas guardada: {output_csv}")
+
+
+def create_metaheuristic_comparison_graph(
+    df_results: pd.DataFrame,
+    output_png: str = "metaheuristic_times.png"
+) -> None:
+    """
+    Genera gráfica de barras comparativa de tiempos de metaheurísticas en ms
+    
+    Args:
+        df_results: DataFrame con los resultados
+        output_png: Ruta de salida para la gráfica
+    """
+    print(f"  Generando gráfica de tiempos de metaheurísticas: {output_png}...")
+    
+    plt.figure(figsize=(14, 8))
+    
+    x = np.arange(len(df_results))
+    width = 0.13
+    
+    algorithms = [
+        ('ga_metaheuristic_time', 'GA', "#f5b20b"),
+        ('aga_metaheuristic_time', 'AGA', "#d5f041"),
+        ('pso_metaheuristic_time', 'PSO', "#06fc2b"),
+        ('woa_metaheuristic_time', 'WOA', "#028206"),
+        ('hill_climbing_metaheuristic_time', 'Hill Climbing', "#05a1fb"),
+        ('simulated_annealing_metaheuristic_time', 'Simulated Annealing',
+         "#200394")
+    ]
+    
+    bars = []
+    labels = []
+    
+    for idx, (col, label, color) in enumerate(algorithms):
+        if col in df_results.columns:
+            # Convertir a milisegundos
+            times_ms = df_results[col] * 1000
+            bar = plt.bar(x + (idx - 2.5) * width, times_ms, width,
+                         label=label, color=color, alpha=0.85)
+            bars.append(bar)
+            labels.append(label)
+    
+    plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12,
+              fontweight='bold')
+    plt.ylabel('Tiempo de Optimización (milisegundos)', fontsize=12,
+              fontweight='bold')
+    plt.title(
+        'Comparación de Tiempos: Metaheurísticas de Optimización',
+        fontsize=14, fontweight='bold'
+    )
+    plt.xticks(x, [f'{int(s/1000)}K' for s in df_results['size']],
+              rotation=45, ha='right')
+    plt.legend(fontsize=10, loc='upper left', ncol=2)
+    plt.grid(True, alpha=0.3, axis='y', linestyle='--')
+    
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  ✓ Gráfica de tiempos de metaheurísticas guardada: {output_png}")
+
+
+def create_vectorization_time_comparison_graph(
+    df_results: pd.DataFrame,
+    output_png: str = "vectorization_times.png"
+) -> None:
+    """
+    Genera gráfica comparativa de tiempos de vectorización
+    
+    Args:
+        df_results: DataFrame con los resultados
+        output_png: Ruta de salida para la gráfica
+    """
+    print(f"  Generando gráfica de tiempos de vectorización: {output_png}...")
+    
+    plt.figure(figsize=(12, 7))
+    
+    # Geneticos
+    if 'ga_vectorization_time' in df_results.columns:
+        plt.plot(df_results['size'], df_results['ga_vectorization_time'],
+                marker='s', linewidth=2, markersize=8,
+                label='GA Vectorization', color="#f5b20b")
+    
+    if 'aga_vectorization_time' in df_results.columns:
+        plt.plot(df_results['size'], df_results['aga_vectorization_time'],
+                marker='H', linewidth=2, markersize=8,
+                label='AGA Vectorization', color="#d5f041")
+    
+    # Bio inspirados
+    if 'pso_vectorization_time' in df_results.columns:
+        plt.plot(df_results['size'], df_results['pso_vectorization_time'],
+                marker='^', linewidth=2, markersize=8,
+                label='PSO Vectorization', color="#06fc2b")
+    
+    if 'woa_vectorization_time' in df_results.columns:
+        plt.plot(df_results['size'], df_results['woa_vectorization_time'],
+                marker='X', linewidth=2, markersize=8,
+                label='WOA Vectorization', color="#028206")
+    
+    # Local search
+    if 'hill_climbing_vectorization_time' in df_results.columns:
+        plt.plot(
+            df_results['size'],
+            df_results['hill_climbing_vectorization_time'],
+            marker='*', linewidth=2, markersize=8,
+            label='Hill Climbing Vectorization', color="#05a1fb"
+        )
+    
+    if 'simulated_annealing_vectorization_time' in df_results.columns:
+        plt.plot(
+            df_results['size'],
+            df_results['simulated_annealing_vectorization_time'],
+            marker='D', linewidth=2, markersize=8,
+            label='Simulated Annealing Vectorization', color="#200394"
+        )
+    
+    plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
+    plt.ylabel('Tiempo de Vectorización (segundos)', fontsize=12)
+    plt.title(
+        'Comparación de Tiempos: Vectorización Paralela',
+        fontsize=14, fontweight='bold'
+    )
+    plt.legend(fontsize=11, loc='upper left')
+    plt.grid(True, alpha=0.3, linestyle='--')
+    
+    ax = plt.gca()
+    ax.xaxis.set_major_formatter(
+        matplotlib.ticker.FuncFormatter(lambda x, p: f'{int(x):,}')
+    )
+    
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  ✓ Gráfica de tiempos de vectorización guardada: {output_png}")
+
+
+def create_optimization_time_breakdown_graph(
+    df_results: pd.DataFrame,
+    output_png: str = "optimization_times_breakdown.png"
+) -> None:
+    """
+    Genera gráfica de barras agrupadas comparando solo tiempos de optimización
+    
+    Args:
+        df_results: DataFrame con los resultados
+        output_png: Ruta de salida para la gráfica
+    """
+    print(f"  Generando gráfica de tiempos de optimización: {output_png}...")
+    
+    plt.figure(figsize=(16, 9))
+    
+    x = np.arange(len(df_results))
+    width = 0.13
+    
+    algorithms = [
+        ('ga_metaheuristic_time', 'GA', "#f5b20b"),
+        ('aga_metaheuristic_time', 'AGA', "#d5f041"),
+        ('pso_metaheuristic_time', 'PSO', "#06fc2b"),
+        ('woa_metaheuristic_time', 'WOA', "#028206"),
+        ('hill_climbing_metaheuristic_time', 'Hill Climbing', "#05a1fb"),
+        ('simulated_annealing_metaheuristic_time', 'Simulated Annealing',
+         "#200394")
+    ]
+    
+    for idx, (meta_col, label, color) in enumerate(algorithms):
+        if meta_col in df_results.columns:
+            offset = (idx - 2.5) * width
+            # Convertir a milisegundos
+            times_ms = df_results[meta_col] * 1000
+            
+            plt.bar(x + offset, times_ms, width,
+                   label=label, color=color, alpha=0.85)
+    
+    plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12,
+              fontweight='bold')
+    plt.ylabel('Tiempo de Optimización (milisegundos)', fontsize=12,
+              fontweight='bold')
+    plt.title(
+        'Desglose de Tiempos de Optimización: Comparativa de Metaheurísticas',
+        fontsize=14, fontweight='bold'
+    )
+    plt.xticks(x, [f'{int(s/1000)}K' for s in df_results['size']],
+              rotation=45, ha='right')
+    plt.legend(fontsize=11, loc='upper left', ncol=3, framealpha=0.95)
+    plt.grid(True, alpha=0.3, axis='y', linestyle='--')
+    
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  ✓ Gráfica de tiempos de optimización guardada: {output_png}")
+
+
+def print_metaheuristic_summary(df_results: pd.DataFrame) -> None:
+    """
+    Imprime resumen de tiempos de metaheurísticas
+    
+    Args:
+        df_results: DataFrame con los resultados
+    """
+    print("\n" + "=" * 80)
+    print("RESUMEN DE TIEMPOS DE METAHEURÍSTICAS (sin Vectorización)")
+    print("=" * 80)
+    
+    algorithms = [
+        ('GA', 'ga_metaheuristic_time'),
+        ('AGA', 'aga_metaheuristic_time'),
+        ('PSO', 'pso_metaheuristic_time'),
+        ('WOA', 'woa_metaheuristic_time'),
+        ('Hill Climbing', 'hill_climbing_metaheuristic_time'),
+        ('Simulated Annealing', 'simulated_annealing_metaheuristic_time')
+    ]
+    
+    for name, col in algorithms:
+        if col in df_results.columns:
+            times = df_results[col]
+            valid_times = times[~times.isna()]
+            if len(valid_times) > 0:
+                avg_time = valid_times.mean()
+                min_time = valid_times.min()
+                max_time = valid_times.max()
+                avg_time_ms = avg_time * 1000
+                min_time_ms = min_time * 1000
+                max_time_ms = max_time * 1000
+                print(f"\n{name}:")
+                print(f"  Promedio: {avg_time:.4f}s ({avg_time_ms:.2f}ms)")
+                print(f"  Mínimo: {min_time:.4f}s ({min_time_ms:.2f}ms)")
+                print(f"  Máximo: {max_time:.4f}s ({max_time_ms:.2f}ms)")
+
+
+# ============================================================================
 # FUNCIÓN PRINCIPAL DE COMPARACIÓN
 # ============================================================================
 
@@ -40,9 +334,13 @@ def compare_pipelines(
     output_csv: str = "comparison_times.csv",
     output_png: str = "comparison_times.png",
     output_speedup_png: str = "comparison_speedup.png",
+    output_metaheuristic_png: str = "metaheuristic_times.png",
+    output_metaheuristic_csv: str = "metaheuristic_times.csv",
+    output_vectorization_png: str = "vectorization_times.png",
+    output_breakdown_png: str = "optimization_times_breakdown.png",
     # geneticos
     ga_config: Dict[str, Any] = GA_CONFIG,
-    aga_config: Dict[str,Any] = GA_CONFIG_ADAPTIVE,
+    aga_config: Dict[str, Any] = GA_CONFIG_ADAPTIVE,
     # bio inspirados
     pso_config: Dict[str, Any] = PSO_CONFIG,
     woa_config: Dict[str, Any] = WOA_CONFIG,
@@ -61,9 +359,13 @@ def compare_pipelines(
         output_csv: Archivo CSV de salida
         output_png: Gráfica de tiempos
         output_speedup_png: Gráfica de speedup
-
+        output_metaheuristic_png: Gráfica de tiempos de metaheurísticas
+        output_metaheuristic_csv: CSV de tiempos de metaheurísticas
+        output_vectorization_png: Gráfica de tiempos de vectorización
+        output_breakdown_png: Gráfica de tiempos de optimización
         verbose: Si True, muestra evolución detallada
         train_models: Si True, entrena un MLP al final de la vectorizacion
+    
     Returns:
         DataFrame con resultados
     """
@@ -102,11 +404,12 @@ def compare_pipelines(
     print(f"✓ Configuración GA: {ga_config['num_cores']} cores, "
           f"{ga_config['population_size']} población, "
           f"{ga_config['num_generations']} generaciones")
-    print(f"  (con subtareas: {4 * ga_config['num_cores']} subtareas/tarea para mejor balanceo)")
+    print(f"  (con subtareas: {4 * ga_config['num_cores']} subtareas/tarea "
+          "para mejor balanceo)")
     
     print(f"✓ Configuración PSO: {pso_config['num_cores']} cores, "
-            f"{pso_config['num_particles']} partículas, "
-            f"{pso_config['num_iterations']} iteraciones")
+          f"{pso_config['num_particles']} partículas, "
+          f"{pso_config['num_iterations']} iteraciones")
     
     # ========================================================================
     # EJECUTAR EXPERIMENTOS
@@ -115,7 +418,8 @@ def compare_pipelines(
     
     for size in sizes:
         if size > len(df_full):
-            print(f"⚠ Tamaño solicitado ({size:,}) excede datos disponibles. Usando todos.")
+            print(f"⚠ Tamaño solicitado ({size:,}) excede datos disponibles. "
+                  "Usando todos.")
             size = len(df_full)
         
         print("\n" + "=" * 80)
@@ -146,6 +450,20 @@ def compare_pipelines(
             'hill_climbing_accuracy': np.nan,
             'simulated_annealing_accuracy': np.nan,
             'aga_accuracy': np.nan,
+            # Tiempos de metaheurísticas (sin vectorización)
+            'ga_metaheuristic_time': np.nan,
+            'pso_metaheuristic_time': np.nan,
+            'woa_metaheuristic_time': np.nan,
+            'hill_climbing_metaheuristic_time': np.nan,
+            'simulated_annealing_metaheuristic_time': np.nan,
+            'aga_metaheuristic_time': np.nan,
+            # Tiempos de vectorización
+            'ga_vectorization_time': np.nan,
+            'pso_vectorization_time': np.nan,
+            'woa_vectorization_time': np.nan,
+            'hill_climbing_vectorization_time': np.nan,
+            'simulated_annealing_vectorization_time': np.nan,
+            'aga_vectorization_time': np.nan,
         }
         
         # ====================================================================
@@ -164,7 +482,9 @@ def compare_pipelines(
             )
             experiment_result['seq_time'] = seq_total_time
             if train_now and 'mlp_stats' in seq_stats:
-                experiment_result['seq_accuracy'] = seq_stats['mlp_stats']['accuracy']
+                experiment_result['seq_accuracy'] = (
+                    seq_stats['mlp_stats']['accuracy']
+                )
             print(f"✓ [SECUENCIAL] Completado en {seq_total_time:.2f}s")
         except Exception as e:
             print(f"✗ [SECUENCIAL] Error: {e}")
@@ -181,26 +501,51 @@ def compare_pipelines(
         
         try:
             train_now = train_models and (size == sizes[-1])
-            _, ga_total_time, ga_stats = vectorize_with_ga_load_balancing(
-                df_subset,
-                config=ga_config,
-                verbose=verbose,
-                train_model=train_now
+            _, ga_total_time, ga_stats = (
+                vectorize_with_ga_load_balancing(
+                    df_subset,
+                    config=ga_config,
+                    verbose=verbose,
+                    train_model=train_now
+                )
             )
             experiment_result['ga_time'] = ga_total_time
+            experiment_result['ga_metaheuristic_time'] = extract_metaheuristic_time(
+                ga_stats, 'ga'
+            )
+            experiment_result['ga_vectorization_time'] = ga_stats.get(
+                'vectorization_time', 0.0
+            )
+            
             if train_now and 'mlp_stats' in ga_stats:
-                experiment_result['ga_accuracy'] = ga_stats['mlp_stats']['accuracy']
+                experiment_result['ga_accuracy'] = (
+                    ga_stats['mlp_stats']['accuracy']
+                )
             print(f"✓ [GA-PARALELO] Completado en {ga_total_time:.2f}s")
+            print(
+                f"  - Tiempo GA: {experiment_result['ga_metaheuristic_time']:.2f}s"
+            )
+            print(
+                f"  - Tiempo Vectorización: "
+                f"{experiment_result['ga_vectorization_time']:.2f}s"
+            )
             
             # Mostrar info de subtareas si está disponible
             if verbose and 'num_subtasks' in ga_stats:
                 print(f"  - Tareas: {ga_stats.get('num_tasks', 'N/A')}")
                 print(f"  - Subtareas: {ga_stats['num_subtasks']} "
-                      f"({ga_stats.get('subtasks_per_task', 'N/A')} por tarea)")
-                print(f"  - Tiempo GA: {ga_stats.get('ga_time', 0):.2f}s "
-                      f"({ga_stats.get('ga_time', 0)/ga_total_time*100:.1f}%)")
-                print(f"  - Tiempo vectorización: {ga_stats.get('vectorization_time', 0):.2f}s "
-                      f"({ga_stats.get('vectorization_time', 0)/ga_total_time*100:.1f}%)")
+                      f"({ga_stats.get('subtasks_per_task', 'N/A')} "
+                      "por tarea)")
+                print(
+                    f"  - Tiempo GA: {ga_stats.get('ga_time', 0):.2f}s "
+                    f"({ga_stats.get('ga_time', 0)/ga_total_time*100:.1f}%)"
+                )
+                print(
+                    f"  - Tiempo vectorización: "
+                    f"{ga_stats.get('vectorization_time', 0):.2f}s "
+                    f"{ga_stats.get('vectorization_time', 0)}"
+                    f"{ga_total_time*100:.1f}"
+                )
         except Exception as e:
             print(f"✗ [GA-PARALELO] Error: {e}")
             import traceback
@@ -217,17 +562,36 @@ def compare_pipelines(
         try:
             train_now = train_models and (size == sizes[-1])
             
-            _, pso_total_time, pso_stats = vectorize_with_pso_load_balancing(
-                df_subset,
-                config=pso_config,
-                verbose=verbose,
-                train_model=train_now
+            _, pso_total_time, pso_stats = (
+                vectorize_with_pso_load_balancing(
+                    df_subset,
+                    config=pso_config,
+                    verbose=verbose,
+                    train_model=train_now
+                )
             )
             experiment_result['pso_time'] = pso_total_time
+            experiment_result['pso_metaheuristic_time'] = (
+                extract_metaheuristic_time(pso_stats, 'pso')
+            )
+            experiment_result['pso_vectorization_time'] = pso_stats.get(
+                'vectorization_time', 0.0
+            )
+            
             if train_now and 'mlp_stats' in pso_stats:
-                experiment_result['pso_accuracy'] = pso_stats['mlp_stats']['accuracy']
-                
+                experiment_result['pso_accuracy'] = (
+                    pso_stats['mlp_stats']['accuracy']
+                )
+            
             print(f"✓ [PSO-PARALELO] Completado en {pso_total_time:.2f}s")
+            print(
+                f"  - Tiempo PSO: "
+                f"{experiment_result['pso_metaheuristic_time']:.2f}s"
+            )
+            print(
+                f"  - Tiempo Vectorización: "
+                f"{experiment_result['pso_vectorization_time']:.2f}s"
+            )
         except Exception as e:
             print(f"✗ [PSO-PARALELO] Error: {e}")
             import traceback
@@ -244,17 +608,36 @@ def compare_pipelines(
         try:
             train_now = train_models and (size == sizes[-1])
             
-            _, woa_total_time, woa_stats = vectorize_with_woa_load_balancing(
-                df_subset,
-                config=woa_config,
-                verbose=verbose,
-                train_model=train_now
+            _, woa_total_time, woa_stats = (
+                vectorize_with_woa_load_balancing(
+                    df_subset,
+                    config=woa_config,
+                    verbose=verbose,
+                    train_model=train_now
+                )
             )
             experiment_result['woa_time'] = woa_total_time
+            experiment_result['woa_metaheuristic_time'] = (
+                extract_metaheuristic_time(woa_stats, 'woa')
+            )
+            experiment_result['woa_vectorization_time'] = woa_stats.get(
+                'vectorization_time', 0.0
+            )
+            
             if train_now and 'mlp_stats' in woa_stats:
-                experiment_result['pso_accuracy'] = woa_stats['mlp_stats']['accuracy']
-                
+                experiment_result['woa_accuracy'] = (
+                    woa_stats['mlp_stats']['accuracy']
+                )
+            
             print(f"✓ [WOA-PARALELO] Completado en {woa_total_time:.2f}s")
+            print(
+                f"  - Tiempo WOA: "
+                f"{experiment_result['woa_metaheuristic_time']:.2f}s"
+            )
+            print(
+                f"  - Tiempo Vectorización: "
+                f"{experiment_result['woa_vectorization_time']:.2f}s"
+            )
         except Exception as e:
             print(f"✗ [WOA-PARALELO] Error: {e}")
             import traceback
@@ -271,17 +654,39 @@ def compare_pipelines(
         try:
             train_now = train_models and (size == sizes[-1])
             
-            _, hill_climbing_total_time, hill_climbing_stats = vectorize_with_hill_climbing(
-                df_subset,
-                config=hill_climbing_config,
-                verbose=verbose,
-                train_model=train_now
+            _, hill_climbing_total_time, hill_climbing_stats = (
+                vectorize_with_hill_climbing(
+                    df_subset,
+                    config=hill_climbing_config,
+                    verbose=verbose,
+                    train_model=train_now
+                )
             )
             experiment_result['hill_climbing_time'] = hill_climbing_total_time
+            experiment_result['hill_climbing_metaheuristic_time'] = (
+                extract_metaheuristic_time(hill_climbing_stats, 'hill_climbing')
+            )
+            experiment_result['hill_climbing_vectorization_time'] = (
+                hill_climbing_stats.get('vectorization_time', 0.0)
+            )
+            
             if train_now and 'mlp_stats' in hill_climbing_stats:
-                experiment_result['hill_climbing_accuracy'] = hill_climbing_stats['mlp_stats']['accuracy']
-                
-            print(f"✓ [HILL CLIMBING-PARALELO] Completado en {hill_climbing_total_time:.2f}s")
+                experiment_result['hill_climbing_accuracy'] = (
+                    hill_climbing_stats['mlp_stats']['accuracy']
+                )
+            
+            print(
+                f"✓ [HILL CLIMBING-PARALELO] Completado en "
+                f"{hill_climbing_total_time:.2f}s"
+            )
+            print(
+                f"  - Tiempo Hill Climbing: "
+                f"{experiment_result['hill_climbing_metaheuristic_time']:.2f}s"
+            )
+            print(
+                f"  - Tiempo Vectorización: "
+                f"{experiment_result['hill_climbing_vectorization_time']:.2f}s"
+            )
         except Exception as e:
             print(f"✗ [HILL CLIMBING-PARALELO] Error: {e}")
             import traceback
@@ -298,17 +703,43 @@ def compare_pipelines(
         try:
             train_now = train_models and (size == sizes[-1])
             
-            _, simulated_annealing_total_time, simulated_annealing_stats = vectorize_with_simulated_annealing(
-                df_subset,
-                config=simulated_annealing_config,
-                verbose=verbose,
-                train_model=train_now
+            _, simulated_annealing_total_time, simulated_annealing_stats = (
+                vectorize_with_simulated_annealing(
+                    df_subset,
+                    config=simulated_annealing_config,
+                    verbose=verbose,
+                    train_model=train_now
+                )
             )
-            experiment_result['simulated_annealing_time'] = simulated_annealing_total_time
+            experiment_result['simulated_annealing_time'] = (
+                simulated_annealing_total_time
+            )
+            experiment_result['simulated_annealing_metaheuristic_time'] = (
+                extract_metaheuristic_time(
+                    simulated_annealing_stats, 'simulated_annealing'
+                )
+            )
+            experiment_result['simulated_annealing_vectorization_time'] = (
+                simulated_annealing_stats.get('vectorization_time', 0.0)
+            )
+            
             if train_now and 'mlp_stats' in simulated_annealing_stats:
-                experiment_result['simulated_annealing_accuracy'] = simulated_annealing_stats['mlp_stats']['accuracy']
-                
-            print(f"✓ [SIMULATED ANNEALING-PARALELO] Completado en {simulated_annealing_total_time:.2f}s")
+                experiment_result['simulated_annealing_accuracy'] = (
+                    simulated_annealing_stats['mlp_stats']['accuracy']
+                )
+            
+            print(
+                f"✓ [SIMULATED ANNEALING-PARALELO] Completado en "
+                f"{simulated_annealing_total_time:.4f}s"
+            )
+            print(
+                f"  - Tiempo Simulated Annealing: "
+                f"{experiment_result['simulated_annealing_metaheuristic_time']:.4f}s"
+            )
+            print(
+                f"  - Tiempo Vectorización: "
+                f"{experiment_result['simulated_annealing_vectorization_time']:.4f}s"
+            )
         except Exception as e:
             print(f"✗ [SIMULATED ANNEALING-PARALELO] Error: {e}")
             import traceback
@@ -324,26 +755,52 @@ def compare_pipelines(
         
         try:
             train_now = train_models and (size == sizes[-1])
-            _, aga_total_time, aga_stats = vectorize_with_ga_adaptive_load_balancing(
-                df_subset,
-                config=aga_config,
-                verbose=verbose,
-                train_model=train_now
+            _, aga_total_time, aga_stats = (
+                vectorize_with_ga_adaptive_load_balancing(
+                    df_subset,
+                    config=aga_config,
+                    verbose=verbose,
+                    train_model=train_now
+                )
             )
             experiment_result['aga_time'] = aga_total_time
+            experiment_result['aga_metaheuristic_time'] = (
+                extract_metaheuristic_time(aga_stats, 'aga')
+            )
+            experiment_result['aga_vectorization_time'] = aga_stats.get(
+                'vectorization_time', 0.0
+            )
+            
             if train_now and 'mlp_stats' in aga_stats:
-                experiment_result['aga_accuracy'] = aga_stats['mlp_stats']['accuracy']
+                experiment_result['aga_accuracy'] = (
+                    aga_stats['mlp_stats']['accuracy']
+                )
             print(f"✓ [AGA-PARALELO] Completado en {aga_total_time:.2f}s")
+            print(
+                f"  - Tiempo AGA: "
+                f"{experiment_result['aga_metaheuristic_time']:.2f}s"
+            )
+            print(
+                f"  - Tiempo Vectorización: "
+                f"{experiment_result['aga_vectorization_time']:.2f}s"
+            )
             
             # Mostrar info de subtareas si está disponible
             if verbose and 'num_subtasks' in aga_stats:
                 print(f"  - Tareas: {aga_stats.get('num_tasks', 'N/A')}")
                 print(f"  - Subtareas: {aga_stats['num_subtasks']} "
-                      f"({aga_stats.get('subtasks_per_task', 'N/A')} por tarea)")
-                print(f"  - Tiempo GA: {aga_stats.get('ga_time', 0):.2f}s "
-                      f"({aga_stats.get('ga_time', 0)/aga_total_time*100:.1f}%)")
-                print(f"  - Tiempo vectorización: {aga_stats.get('vectorization_time', 0):.2f}s "
-                      f"({aga_stats.get('vectorization_time', 0)/aga_total_time*100:.1f}%)")
+                      f"({aga_stats.get('subtasks_per_task', 'N/A')} "
+                      "por tarea)")
+                print(
+                    f"  - Tiempo GA: {aga_stats.get('ga_time', 0):.2f}s "
+                    f"({aga_stats.get('ga_time', 0)/aga_total_time*100:.1f}%)"
+                )
+                print(
+                    f"  - Tiempo vectorización: "
+                    f"{aga_stats.get('vectorization_time', 0):.2f}s "
+                    f"{aga_stats.get('vectorization_time', 0)}"
+                    f"{aga_total_time*100:.1f}"
+                )
         except Exception as e:
             print(f"✗ [AGA-PARALELO] Error: {e}")
             import traceback
@@ -362,7 +819,9 @@ def compare_pipelines(
         pso_time = experiment_result['pso_time']
         woa_time = experiment_result['woa_time']
         hill_climbing_time = experiment_result['hill_climbing_time']
-        simulated_annealing_time = experiment_result['simulated_annealing_time']
+        simulated_annealing_time = (
+            experiment_result['simulated_annealing_time']
+        )
         aga_time = experiment_result['aga_time']
         
         if not np.isnan(ga_time) and not np.isnan(seq_time) and seq_time > 0:
@@ -386,17 +845,26 @@ def compare_pipelines(
         else:
             print("  WOA Speedup: N/A")
             
-        if not np.isnan(hill_climbing_time) and not np.isnan(seq_time) and seq_time > 0:
+        if (not np.isnan(hill_climbing_time) and not np.isnan(seq_time) and
+                seq_time > 0):
             hill_climbing_speedup = seq_time / hill_climbing_time
             experiment_result['hill_climbing_speedup'] = hill_climbing_speedup
             print(f"  Hill Climbing Speedup: {hill_climbing_speedup:.2f}x")
         else:
             print("  Hill Climbing Speedup: N/A")
             
-        if not np.isnan(simulated_annealing_time) and not np.isnan(seq_time) and seq_time > 0:
-            simulated_annealing_speedup = seq_time /  simulated_annealing_time
-            experiment_result['simulated_annealing_speedup'] =  simulated_annealing_speedup
-            print(f"  SIMULATED ANNEALING Speedup: { simulated_annealing_speedup:.2f}x")
+        if (not np.isnan(simulated_annealing_time) and not np.isnan(seq_time)
+                and seq_time > 0):
+            simulated_annealing_speedup = (
+                seq_time / simulated_annealing_time
+            )
+            experiment_result['simulated_annealing_speedup'] = (
+                simulated_annealing_speedup
+            )
+            print(
+                f"  SIMULATED ANNEALING Speedup: "
+                f"{simulated_annealing_speedup:.2f}x"
+            )
         else:
             print("  SIMULATED ANNEALING Speedup: N/A")
         
@@ -414,12 +882,30 @@ def compare_pipelines(
         print("-" * 80)
         print(f"  Tamaño: {size:,} tweets")
         print(f"  Secuencial: {seq_time:.2f}s")
-        print(f"  GA-Paralelo: {ga_time:.2f}s (speedup: {experiment_result['ga_speedup']:.2f}x)")
-        print(f"  PSO-Paralelo: {pso_time:.2f}s (speedup: {experiment_result['pso_speedup']:.2f}x)")
-        print(f"  WOA-Paralelo: {woa_time:.2f}s (speedup: {experiment_result['woa_speedup']:.2f}x)")
-        print(f"  Hill Climbing-Paralelo: {hill_climbing_time:.2f}s (speedup: {experiment_result['hill_climbing_speedup']:.2f}x)")
-        print(f"  SIMULATED ANNEALING-Paralelo: {simulated_annealing_time:.2f}s (speedup: {experiment_result['simulated_annealing_speedup']:.2f}x)")
-        print(f"  AGA-Paralelo: {aga_time:.2f}s (speedup: {experiment_result['aga_speedup']:.2f}x)")
+        print(
+            f"  GA-Paralelo: {ga_time:.2f}s "
+            f"(speedup: {experiment_result['ga_speedup']:.2f}x)"
+        )
+        print(
+            f"  PSO-Paralelo: {pso_time:.2f}s "
+            f"(speedup: {experiment_result['pso_speedup']:.2f}x)"
+        )
+        print(
+            f"  WOA-Paralelo: {woa_time:.2f}s "
+            f"(speedup: {experiment_result['woa_speedup']:.2f}x)"
+        )
+        print(
+            f"  Hill Climbing-Paralelo: {hill_climbing_time:.2f}s "
+            f"(speedup: {experiment_result['hill_climbing_speedup']:.2f}x)"
+        )
+        print(
+            f"  SIMULATED ANNEALING-Paralelo: {simulated_annealing_time:.2f}s "
+            f"(speedup: {experiment_result['simulated_annealing_speedup']:.2f}x)"
+        )
+        print(
+            f"  AGA-Paralelo: {aga_time:.2f}s "
+            f"(speedup: {experiment_result['aga_speedup']:.2f}x)"
+        )
     
     # ========================================================================
     # GENERAR DATAFRAME
@@ -430,13 +916,39 @@ def compare_pipelines(
     
     df_results = pd.DataFrame(results)
     
-    column_order = ['size', 'seq_time', 'ga_time', 'pso_time','woa_time','hill_climbing_time','simulated_annealing_time','aga_time'
-                   'ga_speedup', 'pso_speedup','woa_speedup','hill_climbing_speedup','simulated_annealing_speedup','aga_speedup']
+    column_order = [
+        'size',
+        'seq_time',
+        'ga_time',
+        'pso_time',
+        'woa_time',
+        'hill_climbing_time',
+        'simulated_annealing_time',
+        'aga_time',
+        'ga_speedup',
+        'pso_speedup',
+        'woa_speedup',
+        'hill_climbing_speedup',
+        'simulated_annealing_speedup',
+        'aga_speedup',
+        'ga_metaheuristic_time',
+        'pso_metaheuristic_time',
+        'woa_metaheuristic_time',
+        'hill_climbing_metaheuristic_time',
+        'simulated_annealing_metaheuristic_time',
+        'aga_metaheuristic_time',
+        'ga_vectorization_time',
+        'pso_vectorization_time',
+        'woa_vectorization_time',
+        'hill_climbing_vectorization_time',
+        'simulated_annealing_vectorization_time',
+        'aga_vectorization_time',
+    ]
     column_order = [col for col in column_order if col in df_results.columns]
     df_results = df_results[column_order]
     
     # ========================================================================
-    # GUARDAR CSV
+    # GUARDAR CSV PRINCIPAL
     # ========================================================================
     print(f"\n  Guardando tabla de resultados en {output_csv}...")
     df_results.to_csv(output_csv, index=False, float_format='%.4f')
@@ -448,13 +960,21 @@ def compare_pipelines(
     print(df_results.to_string(index=False))
     
     # ========================================================================
+    # GUARDAR CSV DE METAHEURÍSTICAS
+    # ========================================================================
+    print("\n" + "=" * 80)
+    print("GUARDANDO ARCHIVOS COMPLEMENTARIOS")
+    print("=" * 80)
+    save_metaheuristic_times_to_csv(df_results, output_metaheuristic_csv)
+    
+    # ========================================================================
     # GENERAR GRÁFICAS
     # ========================================================================
     print("\n" + "=" * 80)
     print("GENERANDO GRÁFICAS")
     print("=" * 80)
     
-    # Gráfica 1: Tiempos
+    # Gráfica 1: Tiempos totales
     print(f"  Generando gráfica de tiempos: {output_png}...")
     
     plt.figure(figsize=(12, 7))
@@ -467,7 +987,7 @@ def compare_pipelines(
             marker='s', linewidth=2, markersize=8,
             label='GA-Paralelo', color="#f5b20b")
     
-    plt.plot(df_results['size'], df_results['ga_time'],
+    plt.plot(df_results['size'], df_results['aga_time'],
         marker='H', linewidth=2, markersize=8,
         label='AGA-Paralelo', color="#d5f041")
     # Bio inspirados
@@ -489,8 +1009,10 @@ def compare_pipelines(
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Tiempo de Ejecución (segundos)', fontsize=12)
-    plt.title('Comparación de Tiempos: Secuencial, GA, PSO, WOA, Hill Climbing ',
-             fontsize=14, fontweight='bold')
+    plt.title(
+        'Comparación de Tiempos Totales: Secuencial vs Metaheurísticas',
+        fontsize=14, fontweight='bold'
+    )
     plt.legend(fontsize=11, loc='upper left')
     plt.grid(True, alpha=0.3, linestyle='--')
     
@@ -518,34 +1040,37 @@ def compare_pipelines(
                linewidth=1, alpha=0.5, label='Sin mejora (1x)')
     
     # Geneticos
-    plt.plot(df_results['size'], df_results['ga_time'],
+    plt.plot(df_results['size'], df_results['ga_speedup'],
             marker='s', linewidth=2, markersize=8,
             label='GA-Paralelo', color="#f5b20b")
     
-    plt.plot(df_results['size'], df_results['ga_time'],
+    plt.plot(df_results['size'], df_results['aga_speedup'],
         marker='H', linewidth=2, markersize=8,
         label='AGA-Paralelo', color="#d5f041")
     # Bio inspirados
-    plt.plot(df_results['size'], df_results['pso_time'],
+    plt.plot(df_results['size'], df_results['pso_speedup'],
             marker='^', linewidth=2, markersize=8,
             label='PSO-Paralelo', color="#06fc2b")
     
-    plt.plot(df_results['size'], df_results['woa_time'],
+    plt.plot(df_results['size'], df_results['woa_speedup'],
             marker='X', linewidth=2, markersize=8,
             label='WOA-Paralelo', color="#028206")
     # Local search
-    plt.plot(df_results['size'], df_results['hill_climbing_time'],
+    plt.plot(df_results['size'], df_results['hill_climbing_speedup'],
             marker='*', linewidth=2, markersize=8,
             label='HILL CLIMBING-Paralelo', color="#05a1fb")
     
-    plt.plot(df_results['size'], df_results['simulated_annealing_time'],
+    plt.plot(df_results['size'], df_results['simulated_annealing_speedup'],
             marker='D', linewidth=2, markersize=8,
             label='SIMULATED ANNEALING-Paralelo', color="#200394")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Speedup (veces más rápido que secuencial)', fontsize=12)
-    plt.title('Speedup Comparativo: GA, AGA, PSO, WOA, Hill Climbing, Simulated Annealing',
-             fontsize=14, fontweight='bold')
+    plt.title(
+        'Speedup Comparativo: GA, AGA, PSO, WOA, Hill Climbing, '
+        'Simulated Annealing',
+        fontsize=14, fontweight='bold'
+    )
     plt.legend(fontsize=11, loc='upper left')
     plt.grid(True, alpha=0.3, linestyle='--')
     
@@ -560,6 +1085,20 @@ def compare_pipelines(
     
     print(f"  ✓ Gráfica de speedup guardada: {output_speedup_png}")
     
+    # Gráfica 3: Tiempos de metaheurísticas (en milisegundos, bar graph)
+    create_metaheuristic_comparison_graph(df_results, output_metaheuristic_png)
+    
+    # Gráfica 4: Tiempos de vectorización
+    create_vectorization_time_comparison_graph(df_results, output_vectorization_png)
+    
+    # Gráfica 5: Tiempos de optimización (solo metaheurísticas)
+    create_optimization_time_breakdown_graph(df_results, output_breakdown_png)
+    
+    # ========================================================================
+    # IMPRIMIR RESUMEN DE METAHEURÍSTICAS
+    # ========================================================================
+    print_metaheuristic_summary(df_results)
+    
     # ========================================================================
     # FINALIZACIÓN
     # ========================================================================
@@ -567,9 +1106,16 @@ def compare_pipelines(
     print("COMPARACIÓN COMPLETADA")
     print("=" * 80)
     print(f"\nArchivos generados:")
-    print(f"  • {output_csv} - Tabla de resultados")
-    print(f"  • {output_png} - Gráfica de tiempos")
+    print(f"  • {output_csv} - Tabla de resultados completos")
+    print(f"  • {output_metaheuristic_csv} - Tabla de tiempos de "
+          f"metaheurísticas (en ms)")
+    print(f"  • {output_png} - Gráfica de tiempos totales")
     print(f"  • {output_speedup_png} - Gráfica de speedup")
+    print(f"  • {output_metaheuristic_png} - Gráfica de tiempos de "
+          f"metaheurísticas (bar)")
+    print(f"  • {output_vectorization_png} - Gráfica de tiempos de "
+          f"vectorización")
+    print(f"  • {output_breakdown_png} - Gráfica de tiempos de optimización")
     print("\n" + "=" * 80)
     
     return df_results
@@ -600,7 +1146,7 @@ if __name__ == '__main__':
     print(f"  • Rango: {SIZES[0]:,} - {SIZES[-1]:,} tweets")
     print(f"  • Cores disponibles: {GA_CONFIG['num_cores']}")
     
-    #Preguntar sobre entrenamiento de modelo
+    # Preguntar sobre entrenamiento de modelo
     print(f"\n¿Deseas entrenar modelos MLP en el último batch? (y/n): ", end='')
     train_response = input().strip().lower()
     TRAIN_MODELS = (train_response == 'y')
@@ -617,6 +1163,10 @@ if __name__ == '__main__':
             output_csv='comparison_times.csv',
             output_png='comparison_times.png',
             output_speedup_png='comparison_speedup.png',
+            output_metaheuristic_png='metaheuristic_times.png',
+            output_metaheuristic_csv='metaheuristic_times.csv',
+            output_vectorization_png='vectorization_times.png',
+            output_breakdown_png='optimization_times_breakdown.png',
             ga_config=GA_CONFIG,
             aga_config=GA_CONFIG_ADAPTIVE,
             pso_config=PSO_CONFIG,

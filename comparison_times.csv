@@ -1,11 +1,2 @@
-size,seq_time,ga_time,pso_time,woa_time,hill_climbing_time,simulated_annealing_time,pso_speedup,woa_speedup,hill_climbing_speedup,simulated_annealing_speedup,aga_speedup
-20000,1.9427,26.8308,29.1494,34.3526,45.7905,44.9807,0.0666,0.0566,0.0424,0.0432,0.0409
-40000,6.1820,45.5715,45.1091,46.1767,46.5728,45.6303,0.1370,0.1339,0.1327,0.1355,0.1279
-60000,8.4677,46.1186,46.4354,46.5998,47.0712,47.9925,0.1824,0.1817,0.1799,0.1764,0.1716
-80000,11.2315,47.1726,47.9067,47.8864,48.3353,47.2055,0.2344,0.2345,0.2324,0.2379,0.2211
-100000,14.1647,48.3673,49.3081,49.1235,48.8708,49.2028,0.2873,0.2883,0.2898,0.2879,0.2772
-120000,16.9298,48.9636,50.2395,49.3455,51.5630,50.3157,0.3370,0.3431,0.3283,0.3365,0.3237
-140000,19.5540,50.1868,50.5725,50.5143,51.9112,51.4872,0.3867,0.3871,0.3767,0.3798,0.3698
-160000,22.2244,50.7459,50.5965,50.8081,51.8310,51.2131,0.4392,0.4374,0.4288,0.4340,0.4144
-180000,24.9625,51.7520,52.5049,55.2831,53.0372,54.3506,0.4754,0.4515,0.4707,0.4593,0.4383
-200000,28.1876,55.8253,55.4265,55.6860,56.4882,56.0127,0.5086,0.5062,0.4990,0.5032,0.4692
+size,seq_time,ga_time,pso_time,woa_time,hill_climbing_time,simulated_annealing_time,aga_time,ga_speedup,pso_speedup,woa_speedup,hill_climbing_speedup,simulated_annealing_speedup,aga_speedup,ga_metaheuristic_time,pso_metaheuristic_time,woa_metaheuristic_time,hill_climbing_metaheuristic_time,simulated_annealing_metaheuristic_time,aga_metaheuristic_time,ga_vectorization_time,pso_vectorization_time,woa_vectorization_time,hill_climbing_vectorization_time,simulated_annealing_vectorization_time,aga_vectorization_time
+200000,28.9752,7.4068,7.2714,7.7853,7.7680,7.3832,9.4482,3.9120,3.9848,3.7218,3.7301,3.9245,3.0668,0.0385,0.0681,0.2059,0.1629,0.0191,2.1939,6.5270,6.3014,6.2874,6.4527,6.2035,6.1268
