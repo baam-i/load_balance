@@ -229,8 +229,8 @@ def compare_pipelines(
             label='Secuencial (Baseline)', color='#e74c3c')
     
     plt.plot(df_results['size'], df_results['woa_time'],
-            marker='x', linewidth=2, markersize=8,
-            label='WOA-Paralelo', color="#fc4eab")
+            marker='X', linewidth=2, markersize=8,
+            label='WOA-Paralelo', color="#028206")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Tiempo de Ejecución (segundos)', fontsize=12)
@@ -263,8 +263,8 @@ def compare_pipelines(
                linewidth=1, alpha=0.5, label='Sin mejora (1x)')
     
     plt.plot(df_results['size'], df_results['woa_speedup'],
-            marker='x', linewidth=2, markersize=8,
-            label='WOA-Paralelo', color="#fc4eab")
+            marker='X', linewidth=2, markersize=8,
+            label='WOA-Paralelo', color="#028206")
     
     plt.xlabel('Tamaño del Dataset (número de tweets)', fontsize=12)
     plt.ylabel('Speedup (veces más rápido que secuencial)', fontsize=12)

@@ -1,8 +1,12 @@
 .venv/
 .vscode/
 __pycache__/
+
+*.png
+*.csv
 *.pdf
 *.docx
+ *.zip
 
 outputWOA.txt
 
@@ -13,5 +17,3 @@ comparison_times.csv
 
 g2.py
 tempCodeRunnerFile.py
-*.png
-*.csv
